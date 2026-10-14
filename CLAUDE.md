@@ -20,7 +20,7 @@ against the contract's envelope. Every decision is appended to `audit_logs/<run_
 ## Commands
 - Setup (Windows): `setup.bat` (creates .venv, installs, copies .env.example -> .env). Key goes in `.env` as `GROQ_API_KEY=...` (never commit .env).
 - Demo: `run_demo.bat` or `python -m web.server --port 8000`
-- Tests (offline): `python -m pytest -q` (16 tests, must stay green)
+- Tests (offline): `python -m pytest -q` (21 tests, must stay green)
 - Oracle benchmark: `python -m bench.run_agentdojo --planner oracle --suites banking,slack,travel,workspace`
 - Live benchmark (Groq free tier is small): `python -m bench.run_agentdojo --planner groq --suites banking --user-tasks 0-4 --injection-tasks 0-2 --defenses none,prompt,warrant`
 
