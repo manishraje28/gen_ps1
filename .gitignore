@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+audit_logs/*
+!audit_logs/.gitkeep
+traces/*.json
+results/agentdojo_logs/
+results/bench_audit/
+.pytest_cache/
+.claude/settings.local.json
+traces/rejected/
