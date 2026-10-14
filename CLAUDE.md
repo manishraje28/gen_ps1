@@ -14,18 +14,19 @@ against the contract's envelope. Every decision is appended to `audit_logs/<run_
 - `warrant/`: core library: `contract.py`, `gate.py` (gate, shadow exec, verifier, undefended emitting executor), `auditor.py`, `ledger.py`, `policy.py` (effect/sink per tool, demo + all 4 AgentDojo suites), `llm.py` (Groq via OpenAI SDK, retries, tool_use_failed recovery), `pipeline.py`, `config.py` (.env loader), `events.py`
 - `demo/`: Acme workspace env (`env.py`), 4 scenarios with deterministic attack/utility checks (`scenarios.py`), `runner.py` (run a lane; `ScriptedPlanner` offline stand-in)
 - `bench/run_agentdojo.py`: benchmark: `--planner oracle` (LLM-free, fully hijacked worst case) or `--planner groq`; defences none/prompt/detector/warrant_nomask/warrant
+- `web/playground.py`: Playground chat API (`/api/play/*`): sessions, full world, add/upload data, multi-turn turns with CarryLedger
 - `web/server.py`: FastAPI + SSE (`/api/run`, `/api/replay`, `/api/traces`, `/api/bench`, `/api/audit/verify`); `web/static/` vanilla JS UI (no build step)
 - `results/`: oracle benchmark JSON (all 4 suites, already computed); `traces/`: recorded live runs for replay
 
 ## Commands
 - Setup (Windows): `setup.bat` (creates .venv, installs, copies .env.example -> .env). Key goes in `.env` as `GROQ_API_KEY=...` (never commit .env).
 - Demo: `run_demo.bat` or `python -m web.server --port 8000`
-- Tests (offline): `python -m pytest -q` (21 tests, must stay green)
+- Tests (offline): `python -m pytest -q` (33 tests, must stay green)
 - Oracle benchmark: `python -m bench.run_agentdojo --planner oracle --suites banking,slack,travel,workspace`
 - Live benchmark (Groq free tier is small): `python -m bench.run_agentdojo --planner groq --suites banking --user-tasks 0-4 --injection-tasks 0-2 --defenses none,prompt,warrant`
 
 ## Current status
-- Offline tests: 21 pass (Python 3.13, Windows). Groq API reachable from the dev machine.
+- Offline tests: 33 pass (Python 3.13, Windows). Groq API reachable from the dev machine.
 - Groq account has no Llama chat models; defaults are now planner `openai/gpt-oss-20b` (gets hijacked in all
   3 attack scenarios), contract + auditor `openai/gpt-oss-120b`. Free tier ~8k TPM/model, so live runs are slow.
 - Live (runner, single runs): exfil / iban / benign pass 4/4 with mask on+off. Delegation: attack always blocked,

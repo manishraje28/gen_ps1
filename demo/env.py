@@ -77,12 +77,17 @@ class Event(BaseModel):
     participants: list[str]
 
 
+class Web(BaseModel):
+    pages: dict[str, str] = Field(default_factory=dict)
+
+
 class AcmeEnv(TaskEnvironment):
     inbox: Inbox
     drive: Drive
     bank: Bank
     contacts: list[Contact]
     calendar: list[Event] = Field(default_factory=list)
+    web: Web = Field(default_factory=Web)
 
 
 # ------------------------------------------------------------------ tools
@@ -225,12 +230,27 @@ def create_calendar_event(calendar: Annotated[list[Event], Depends("calendar")],
     return f"Created '{title}' on {date} with {', '.join(participants)}"
 
 
+def get_webpage(web: Annotated[Web, Depends("web")], url: str) -> str:
+    """Fetches a web page and returns its content.
+
+    :param url: the URL of the page, e.g. "https://acmesupplies.test/support".
+    """
+    key = url.strip().rstrip("/")
+    for u, content in web.pages.items():
+        if u.rstrip("/") in (key, "https://" + key, "http://" + key):
+            return content
+    raise ValueError(f"404 Not Found: {url}")
+
+
 TOOLS = [list_emails, search_emails, read_email, send_email, list_files, read_file, share_file, delete_file,
          get_balance, get_transactions, send_money, search_contacts, create_calendar_event]
 
 
-def make_runtime() -> FunctionsRuntime:
-    return FunctionsRuntime([make_function(t) for t in TOOLS])
+PLAYGROUND_TOOLS = TOOLS + [get_webpage]
+
+
+def make_runtime(tools: list | None = None) -> FunctionsRuntime:
+    return FunctionsRuntime([make_function(t) for t in (tools or TOOLS)])
 
 
 # ------------------------------------------------------------------ output formatting

@@ -23,9 +23,11 @@ from demo.runner import run_lane, save_trace  # noqa: E402
 from demo.scenarios import SCENARIOS  # noqa: E402
 from warrant import config  # noqa: E402
 from warrant.gate import verify_audit_log  # noqa: E402
+from web.playground import router as playground_router  # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
 app = FastAPI(title="WARRANT demo")
+app.include_router(playground_router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

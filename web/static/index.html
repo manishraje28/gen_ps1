@@ -6,7 +6,7 @@
   <title>WARRANT Demo</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=3">
 </head>
 <body>
 <header class="topbar">
@@ -16,6 +16,7 @@
   </div>
   <nav class="tabs">
     <button class="tab active" data-page="demo">Live demo</button>
+    <button class="tab" data-page="play">Playground</button>
     <button class="tab" data-page="bench">AgentDojo benchmark</button>
     <button class="tab" data-page="how">How it works</button>
   </nav>
@@ -81,6 +82,32 @@
     </div>
   </section>
 
+  <!-- ======================= PLAYGROUND ======================= -->
+  <section class="page" id="page-play">
+    <div class="play">
+      <aside class="panel ws">
+        <div class="wshead"><h3><span data-icon="db"></span>Workspace</h3><button class="btn-ghost" id="pgReset" title="Restore the original workspace and clear the chat">Reset</button></div>
+        <div class="prov">Arjun's emails, drive, web, contacts, bank and calendar. Preloaded with all four demo use cases. Click an item to read it.</div>
+        <div class="subtabs wstabs" id="wsTabs"></div>
+        <div class="wslist" id="wsList"></div>
+        <button class="run" id="pgAddBtn"><span data-icon="file"></span>Add or upload data</button>
+      </aside>
+      <div class="panel chatp">
+        <div class="chathead">
+          <h3><span data-icon="bot"></span>Chat with the Acme assistant</h3>
+          <label class="toggle" title="Run an unprotected copy of the same agent on its own copy of the world, for comparison"><input type="checkbox" id="pgCompare" checked> Also run undefended agent</label>
+          <label class="toggle" title="Untick = stress test: the planner sees raw injected text and the gate must hold alone"><input type="checkbox" id="pgMask" checked> Span Auditor masks injected text</label>
+        </div>
+        <div class="chatlog" id="chatLog"></div>
+        <div class="suggest" id="pgSuggest"></div>
+        <form class="composer" id="pgForm">
+          <textarea id="pgInput" rows="2" placeholder="Ask the assistant anything, e.g. &quot;Summarise the support page at https://acmesupplies.test/support&quot;"></textarea>
+          <button class="run" id="pgSend" type="submit"><span data-icon="arrow"></span>Send</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
   <!-- ======================= BENCHMARK ======================= -->
   <section class="page" id="page-bench">
     <div class="hero" id="benchHero"></div>
@@ -115,6 +142,29 @@
 
 <div class="modal" id="modal"><div class="box"><h3 id="modalTitle"></h3><div class="prov" id="modalSub"></div><pre id="modalBody"></pre><button class="btn-ghost" onclick="document.getElementById('modal').classList.remove('open')">Close</button></div></div>
 
-<script src="/static/app.js"></script>
+<div class="modal" id="pgModal"><div class="box">
+  <h3>Add data to the workspace</h3>
+  <div class="prov">Plant anything an attacker could control: an email, a document in the drive, or a web page. It is added to both agents' worlds.</div>
+  <div class="addform">
+    <label>Type</label>
+    <select id="addKind"><option value="email">Email (arrives in the inbox)</option><option value="file">File (in the drive)</option><option value="web">Web page</option></select>
+    <div class="f-email"><label>From</label><input id="addSender" placeholder="vendor@example.test"></div>
+    <div class="f-email"><label>Subject</label><input id="addSubject" placeholder="Updated bank details"></div>
+    <div class="f-file"><label>File name</label><input id="addName" placeholder="vendor-notice.txt"></div>
+    <div class="f-file"><label>Folder</label><input id="addFolder" value="/uploads"></div>
+    <div class="f-web"><label>URL</label><input id="addUrl" placeholder="https://vendor.test/notice"></div>
+    <label>Content</label>
+    <textarea id="addContent" rows="9" placeholder="Type or paste the content, or upload a file below."></textarea>
+    <div class="addrow">
+      <label class="btn-ghost upl"><span data-icon="file"></span><span id="addFileLbl">Upload a file (txt, pdf, docx, eml, html, csv, json, md…)</span><input type="file" id="addFile" hidden></label>
+      <select id="addTpl"><option value="">Insert an example injection…</option></select>
+    </div>
+    <div class="prov" id="addStatus"></div>
+  </div>
+  <div class="addrow"><button class="run" id="addGo">Add to workspace</button><button class="btn-ghost" id="addCancel" type="button">Cancel</button></div>
+</div></div>
+
+<script src="/static/app.js?v=3"></script>
+<script src="/static/playground.js?v=3"></script>
 </body>
 </html>
