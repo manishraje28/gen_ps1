@@ -120,7 +120,7 @@ def extract_literals(text: str) -> list[str]:
 # "want to / need to / remember to ...". Nouns and questions about data grant READ only.
 _EFFECT_VERBS: dict[Effect, list[str]] = {
     Effect.PAY: ["pay", "transfer", "refund", "reimburse", "wire", "send money"],
-    Effect.EGRESS: ["send", "email", "e-mail", "mail", "forward", "share", "post", "message", "dm", "reply", "respond",
+    Effect.EGRESS: ["send", "email", "e-mail", "mail", "forward", "post", "message", "dm", "reply", "respond",
                     "tell", "notify", "inform", "publish", "text", "cc", "write back", "let \\w+ know"],
     Effect.WRITE: ["create", "book", "schedule", "add", "update", "append", "reserve", "set up", "set a", "rename", "move",
                    "invite", "reschedule", "write", "edit", "organi[sz]e", "put", "join", "change", "modify",
@@ -157,6 +157,8 @@ _EGRESS_EXTRA_RE = re.compile(
     r"\b(?:summary|report|copy|message|note|e-?mail|invitation)\s+to\s+(?:[\w.+-]+@[\w-]+|my |our |the |his |her |their |[A-Z][a-z]+)|"
     r"\b(?:should|must|to|will|please|needs? to|has to|have to)\s+(?:be|get)\s+(?:sent|e-?mailed|forwarded|shared|posted|messaged)\b|"
     r"\bwrite\b(?:\s+\S+){0,3}?\s+(?:the |a |an )?(?:following )?(?:message|e-?mail|reply|dm|post|note to)\b", re.I)
+# "share X with Y" leaves the user; "please share the names" (no one to share with) is an answer in chat.
+_SHARE_RE = re.compile(_LEAD + _FILLER + r"\s*share\b(?:\s+\S+){0,12}?\s+(?:with|to)\b|\bshare\b[^.\n]{0,80}?[\w.+-]+@[\w-]+\.", re.I)
 _PASSIVE_PAY_RE = re.compile(r"\b(?:should|must|to|will|please|needs? to|has to|have to)\s+(?:be|get)\s+(?:paid|transferred|refunded|reimbursed)\b", re.I)
 
 _DELEGATION_RE = re.compile(
@@ -209,7 +211,7 @@ def heuristic_effects(query: str) -> set[Effect]:
         effects.add(Effect.PAY)
     if _ACCOUNT_RE.search(q):
         effects.add(Effect.ACCOUNT)
-    if _EGRESS_EXTRA_RE.search(q):
+    if _EGRESS_EXTRA_RE.search(q) or _SHARE_RE.search(q):
         effects.add(Effect.EGRESS)
     # "update my rent payment" / "update my address" are PAY / ACCOUNT, not a generic WRITE.
     if Effect.WRITE in effects and (Effect.PAY in effects or Effect.ACCOUNT in effects):
@@ -227,6 +229,7 @@ def heuristic_effects(query: str) -> set[Effect]:
 _MENTION_RES: dict[Effect, re.Pattern] = {
     e: re.compile(r"\b(?:" + "|".join(ws) + r")", re.I) for e, ws in _EFFECT_VERBS.items() if ws
 }
+_MENTION_RES[Effect.EGRESS] = re.compile(r"\b(?:share|" + "|".join(_EFFECT_VERBS[Effect.EGRESS]) + r")", re.I)
 _MENTION_RES[Effect.ACCOUNT] = re.compile(r"\b(?:password|passcode|pin|address|account|profile|user info|personal)\b", re.I)
 
 
