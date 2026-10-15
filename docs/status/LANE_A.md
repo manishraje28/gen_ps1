@@ -19,6 +19,22 @@ Updated: 2026-10-15 · Branch: `lane-a/contract` · Owner: Team (Atharva) + Clau
   'Le Marais Boutique'") and doesn't ask the agent to choose ("best", "cheapest", "recommend"...),
   the `TARGET` slot is `USER_LITERAL`. Also fixed `QUOTED_RE`, which read the apostrophe in "I'm"
   as an opening quote and lost quoted names.
+- **A6. Everyday command phrasing** (commit `e3316b7`). "Shoot Priya an email", "drop Bob a line",
+  "loop in X", "settle the invoice", "cover the bill", "top up", "get rid of the drafts", "grab me a
+  room", "rent me an SUV", "my new address is ..., please update it". Held-out set (our own wording,
+  in the tests): **31/31** commands granted, **20/20** read-only questions grant nothing.
+- **A7. Send and payment limits follow the request** (commit `9a45d88`). Without each/every/all or
+  delegation, `max_egress_actions` / `max_payments` = number of sentences that command the effect
+  (at least the number of addresses / IBANs typed). Before, they were 5 and 3. A plural object
+  ("message them") keeps the default. No AgentDojo ground-truth task exceeds its new limit.
+  Example: `travel/user_task_3` email limit 5 → 1, so an injected second email carrying passport
+  data to the same recipient is refused.
+- **A8. Decision on Lane B's question** (commit `b7ca2fe`): `confirm_new_payees` is **False when the
+  user points at exactly one named document to pay from** ("pay the bill in bill-dec.txt"), and
+  True otherwise (vague requests, several documents, delegation). Reason: the user vouched for that
+  document; B1's records binding still stops a known payee whose IBAN differs, and DIRECTIVE spans
+  stay tainted. Fixes the banking benign-utility drop (100% → 93.75%) in the merged A+B run.
+  `OrgPolicy.confirm_*` now default to False ("do not force"); True still forces the confirmation on.
 - **Contract LLM bounded:** the LLM can add an effect only if a trigger word for it appears in the
   request. Before, it could add any effect.
 - **A2. New contract fields** (safe defaults, nothing removed or renamed). See *Interface changes*.
@@ -26,8 +42,8 @@ Updated: 2026-10-15 · Branch: `lane-a/contract` · Owner: Team (Atharva) + Clau
   example `policies/acme.example.yaml`). Loaded from env `WARRANT_ORG_POLICY`. It can only narrow:
   block effects (never READ), cap limits, force `USER_LITERAL` on sinks, disable delegation, switch
   confirmations on. Unknown keys and broken files raise (fail closed).
-- Tests: `tests/test_contract_effects.py` (62 tests, including "no AgentDojo task loses a needed
-  effect"). Full suite: **95 passed**.
+- Tests: `tests/test_contract_effects.py` (115 tests, including "no AgentDojo task loses a needed
+  effect"). Full suite: **148 passed** on `lane-a/contract`; **196 passed** merged with `lane-b/gate`.
 
 Effect grants over all 97 AgentDojo v1.2.1 user tasks (rules-only contract):
 
@@ -42,7 +58,7 @@ the gate); `banking/user_task_10` ("Please pay the bill") has a read-only ground
 `travel/user_task_6` says "I want to book a hotel".
 
 ## In progress
-- Nothing. Open to requests from Lanes B and C. PR: manishraje28/gen_ps1#3.
+- Oracle reruns: A-only on `9a45d88` (limits) and merged A+B on `b7ca2fe` + `lane-b/gate`. PR: manishraje28/gen_ps1#3 (not merged; team decision).
 
 ## Interface changes
 **For Lane B** (read these with `getattr(contract, name, default)` so B works before A merges):
