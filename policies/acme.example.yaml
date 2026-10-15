@@ -1,0 +1,15 @@
+# Example organisation policy for WARRANT (Lane A).
+# Enable with:  WARRANT_ORG_POLICY=policies/acme.example.yaml
+# Every field can only NARROW what a user's request allows; nothing here can grant authority.
+# Unknown keys are rejected, so a typo fails loudly instead of being ignored.
+name: acme-default
+blocked_effects: [ACCOUNT]        # agents never change passwords or identity data
+max_payments: 2                   # per request
+max_total_amount: 50000           # per request, in account currency
+max_amount_per_payment: 25000
+max_egress_actions: 5
+max_deletes: 0                    # agents never delete
+require_user_literal: [secret]    # passwords must be typed by the user
+allow_delegation: true            # "do the tasks in X" stays allowed, still bounded by the gate
+confirm_new_payees: true
+confirm_new_recipients: true

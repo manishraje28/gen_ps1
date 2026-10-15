@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Sequence
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from agentdojo.agent_pipeline import BasePipelineElement
 from agentdojo.functions_runtime import EmptyEnv, Env, FunctionsRuntime
 from agentdojo.types import ChatMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import config
 from .events import NULL_EMITTER, Emitter
@@ -55,6 +57,8 @@ class Limits(BaseModel):
     max_total_amount: float | None = None
     max_deletes: int = 1
     internal_domains: list[str] = Field(default_factory=list)
+    # Hard cap per single payment (None = only the total/budget limits apply). Set by org policy.
+    max_amount_per_payment: float | None = None
 
 
 class IntentContract(BaseModel):
@@ -64,6 +68,13 @@ class IntentContract(BaseModel):
     delegated_sources: list[str] = Field(default_factory=list)
     slots: list[Slot] = Field(default_factory=list)
     limits: Limits = Field(default_factory=Limits)
+    # Lane B enforces these in the gate: a payee IBAN or an external recipient that is neither
+    # typed by the user (USER_LITERAL) nor in the user's records (TRUSTED) needs the user's
+    # confirmation (NEEDS_INPUT: NEW_PAYEE / NEW_RECIPIENT), even when the data backs it (LOOKUP).
+    confirm_new_payees: bool = True
+    confirm_new_recipients: bool = True
+    # Which org policy file narrowed this contract ("" = none). Recorded in the audit log.
+    policy_source: str = ""
     compiled_by: str = "llm"
     hash: str = ""
 
@@ -102,18 +113,57 @@ def extract_literals(text: str) -> list[str]:
     return out
 
 
-# ---------------- keyword fallback (also unioned with the LLM output) ----------------
-_EFFECT_WORDS: dict[Effect, list[str]] = {
-    Effect.PAY: ["pay", "payment", "transfer", "refund", "send money", "send them", "transaction", "rent", "bill", "difference", "reimburse"],
-    Effect.EGRESS: ["send", "email", "e-mail", "forward", "share", "post", "message", "dm ", "reply", "tell ", "invite", "notify", "summary to", "publish"],
-    Effect.WRITE: ["create", "book", "schedule", "add ", "update", "append", "reserve", "set up", "make a", "rename", "move", "invite", "reschedule", "calendar", "meeting", "sync"],
-    Effect.DELETE: ["delete", "remove", "cancel", "clean up", "erase", "kick"],
-    Effect.ACCOUNT: ["password", "my address", "account information", "account info", "user info", "update my info", "moved to"],
+# ---------------- rules-based effect inference (also unioned with the LLM output) ----------------
+# An effect is granted only when the user *commands* it. Many effect words are also nouns
+# ("the latest email", "my rent payment", "a meeting"), so a verb counts only in a command
+# position: at the start of a clause, after "please / and / then / can you ...", or after
+# "want to / need to / remember to ...". Nouns and questions about data grant READ only.
+_EFFECT_VERBS: dict[Effect, list[str]] = {
+    Effect.PAY: ["pay", "transfer", "refund", "reimburse", "wire", "send money"],
+    Effect.EGRESS: ["send", "email", "e-mail", "mail", "forward", "share", "post", "message", "dm", "reply", "respond",
+                    "tell", "notify", "inform", "publish", "text", "cc", "write back", "let \\w+ know"],
+    Effect.WRITE: ["create", "book", "schedule", "add", "update", "append", "reserve", "set up", "set a", "rename", "move",
+                   "invite", "reschedule", "write", "edit", "rent", "organi[sz]e", "put", "join", "change", "modify",
+                   "make (?:a|an|the|me a) (?:reservation|booking|appointment|event|note|file|new|list|copy|calendar)"],
+    Effect.DELETE: ["delete", "remove", "cancel", "clean up", "erase", "kick", "trash", "discard", "purge"],
+    Effect.ACCOUNT: [],  # phrase rule only, see _ACCOUNT_RE
 }
+_LEAD = (
+    r"(?:^|[.!?;:\n(\"'“‘,]|\b\d+[.)]|"
+    r"\b(?:please|pls|and|then|also|kindly|just|or|now|first|next|finally|afterwards|after that|lastly|you|"
+    r"(?:want|need|like|have|going|able|asked|remember|forget|sure|try|wish|plan|ready|you|me|us) to|"
+    r"(?:task|job|goal) is to)\b)"
+)
+_FILLER = r"(?:\s+(?:please|also|then|just|kindly|now|quickly|immediately|go ahead and|actually|still|first|both))*"
+_EFFECT_RES: dict[Effect, re.Pattern] = {
+    e: re.compile(_LEAD + _FILLER + r"\s*(?:" + "|".join(ws) + r")\b", re.I) for e, ws in _EFFECT_VERBS.items() if ws
+}
+# "tell me / show us" answers the user in chat; nothing leaves the user.
+_SELF_ONLY_RE = re.compile(_LEAD + _FILLER + r"\s*(?:(?:tell|inform|text|message)\s+(?:me|us)|let (?:me|us) know)\b(?!\s+(?:by|via|over|in an?)\s+(?:e-?mail|message|slack|text))", re.I)
+# Money words that turn "send them the difference" into a payment rather than an email.
+_MONEY = r"(?:difference|money|amount|payment|refund|rent|fee|balance|\$|€|£|¥|₹|usd|eur|gbp|inr|chf|\d)"
+_SEND_MONEY_RE = re.compile(_LEAD + _FILLER + r"\s*(?:send|give|return)\s+(?:\w+\s+){0,3}?(?:back\s+)?(?:the\s+|an?\s+)?(?:additional\s+|extra\s+|remaining\s+)?" + _MONEY, re.I)
+# "update my rent payment", "set up a recurring transaction", "change the standing order".
+_PAY_OBJECT_RE = re.compile(
+    r"\b(?:update|change|adjust|modify|set up|schedule|cancel|increase|decrease|fix|correct)\b(?:\s+\S+){0,5}?\s+"
+    r"(?:payments?|transactions?|transfers?|standing orders?|scheduled transactions?|rent|subscriptions?)\b", re.I)
+# Identity / credential changes need an explicit change verb aimed at an account field.
+_ACCOUNT_RE = re.compile(
+    _LEAD + _FILLER + r"\s*(?:update|change|reset|set|edit|modify|correct)\s+(?:my|our|the user's|the account|the)\s+(?:\S+\s+){0,2}?"
+    r"(?:password|passcode|pin|address|account (?:info|information|details|settings)|user (?:info|information|details)|"
+    r"profile|personal (?:info|information|details)|(?:first |last )?name|street|city|phone number|e-?mail address)\b", re.I)
+# Passive or noun-phrase egress the verb rule cannot see: "a summary to X", "should be emailed to X".
+_EGRESS_EXTRA_RE = re.compile(
+    r"\b(?:summary|report|copy|message|note|e-?mail|invitation)\s+to\s+(?:[\w.+-]+@[\w-]+|my |our |the |his |her |their |[A-Z][a-z]+)|"
+    r"\b(?:should|must|to|will|please|needs? to|has to|have to)\s+(?:be|get)\s+(?:sent|e-?mailed|forwarded|shared|posted|messaged)\b|"
+    r"\bwrite\b(?:\s+\S+){0,3}?\s+(?:the |a |an )?(?:following )?(?:message|e-?mail|reply|dm|post|note to)\b", re.I)
+_PASSIVE_PAY_RE = re.compile(r"\b(?:should|must|to|will|please|needs? to|has to|have to)\s+(?:be|get)\s+(?:paid|transferred|refunded|reimbursed)\b", re.I)
+
 _DELEGATION_RE = re.compile(
     r"(follow (the |all |his |her |their )?(instructions?|steps|requests?)|do what\b|"
     r"\b(do|complete|handle|perform|execute|carry out|take care of|action)\b[^.]{0,30}\b(tasks?|todos?|to-dos?|instructions?|requests?|actions?|action items)\b[^.]{0,15}\b(in|from|on|of|listed|specified|described|mentioned)\b(?! the order)|"
-    r"as (described|instructed|requested|listed|specified) in|according to the (email|message|file|note|instructions))",
+    r"as (described|instructed|requested|listed|specified) in|"
+    r"\b(act|proceed|do (it|this|that|everything)|respond|handle (it|this|that)) according to the (email|message|file|note|instructions))",
     re.I,
 )
 
@@ -146,9 +196,44 @@ def normalize_slot(sink: Sink, kinds: list[SlotKind]) -> list[SlotKind]:
 
 
 def heuristic_effects(query: str) -> set[Effect]:
-    q = f" {query.lower()} "
-    effects = {e for e, words in _EFFECT_WORDS.items() if any(w in q for w in words)}
+    """Effects the user commands in their own words. READ is implicit and not returned."""
+    q = query.strip()
+    effects = {e for e, rx in _EFFECT_RES.items() if rx.search(q)}
+    if Effect.EGRESS in effects:
+        # Drop EGRESS when every egress verb is "tell me", or "send" is really "send them the difference".
+        rest = _SELF_ONLY_RE.sub(" ", q)
+        rest = _SEND_MONEY_RE.sub(" ", rest)
+        if not _EFFECT_RES[Effect.EGRESS].search(rest):
+            effects.discard(Effect.EGRESS)
+    if _SEND_MONEY_RE.search(q) or _PAY_OBJECT_RE.search(q) or _PASSIVE_PAY_RE.search(q):
+        effects.add(Effect.PAY)
+    if _ACCOUNT_RE.search(q):
+        effects.add(Effect.ACCOUNT)
+    if _EGRESS_EXTRA_RE.search(q):
+        effects.add(Effect.EGRESS)
+    # "update my rent payment" / "update my address" are PAY / ACCOUNT, not a generic WRITE.
+    if Effect.WRITE in effects and (Effect.PAY in effects or Effect.ACCOUNT in effects):
+        rest = _ACCOUNT_RE.sub(" ", _PAY_OBJECT_RE.sub(" ", q))
+        if not _EFFECT_RES[Effect.WRITE].search(rest):
+            effects.discard(Effect.WRITE)
+    # "write them the following message" is EGRESS, not WRITE.
+    if Effect.WRITE in effects and Effect.EGRESS in effects:
+        rest = _EGRESS_EXTRA_RE.sub(" ", q)
+        if not _EFFECT_RES[Effect.WRITE].search(rest):
+            effects.discard(Effect.WRITE)
     return effects
+
+
+_MENTION_RES: dict[Effect, re.Pattern] = {
+    e: re.compile(r"\b(?:" + "|".join(ws) + r")", re.I) for e, ws in _EFFECT_VERBS.items() if ws
+}
+_MENTION_RES[Effect.ACCOUNT] = re.compile(r"\b(?:password|passcode|pin|address|account|profile|user info|personal)\b", re.I)
+
+
+def _effect_mentioned(effect: Effect, query: str) -> bool:
+    """Loose check: does any word for this effect appear anywhere in the request (any position, any form)?"""
+    rx = _MENTION_RES.get(effect)
+    return bool(rx and rx.search(query)) or effect in heuristic_effects(query)
 
 
 def is_delegation(query: str) -> bool:
@@ -179,7 +264,13 @@ Return JSON with keys:
 """
 
 
-def compile_contract(query: str, tool_names: list[str], use_llm: bool = True, internal_domains: list[str] | None = None) -> IntentContract:
+def compile_contract(
+    query: str,
+    tool_names: list[str],
+    use_llm: bool = True,
+    internal_domains: list[str] | None = None,
+    org_policy: "OrgPolicy | None" = None,
+) -> IntentContract:
     literals = extract_literals(query)
     effects = heuristic_effects(query)
     delegated = is_delegation(query)
@@ -196,9 +287,13 @@ def compile_contract(query: str, tool_names: list[str], use_llm: bool = True, in
             data = {"error": str(exc)}
     for e in data.get("allowed_effects", []) or []:
         try:
-            effects.add(Effect(str(e).upper()))
+            eff = Effect(str(e).upper())
         except ValueError:
-            pass
+            continue
+        # The LLM may recover an effect the command rules missed, but only if the user's words
+        # contain a trigger for it somewhere; it can never invent an effect from nothing.
+        if eff == Effect.READ or eff in effects or _effect_mentioned(eff, query):
+            effects.add(eff)
     effects.add(Effect.READ)
     slots: list[Slot] = []
     for s in data.get("slots", []) or []:
@@ -260,7 +355,86 @@ def compile_contract(query: str, tool_names: list[str], use_llm: bool = True, in
         ),
         compiled_by=compiled_by,
     )
+    policy = org_policy if org_policy is not None else load_org_policy()
+    if policy is not None:
+        contract = apply_org_policy(contract, policy)
     return contract.freeze()
+
+
+# ---------------- organisation policy: can only NARROW a compiled contract ----------------
+class OrgPolicy(BaseModel):
+    """Organisation-wide limits, e.g. loaded from YAML. Every field can only remove authority.
+
+    There is deliberately no way to add an effect, a slot kind, a delegated source or an internal
+    domain here: an org policy that could widen a contract would be a second, unaudited authority.
+    """
+
+    model_config = ConfigDict(extra="forbid")  # a typo in a policy file must fail loudly, not be ignored
+
+    name: str = "org-policy"
+    blocked_effects: list[Effect] = Field(default_factory=list)
+    max_egress_actions: int | None = None
+    max_payments: int | None = None
+    max_total_amount: float | None = None
+    max_amount_per_payment: float | None = None
+    max_deletes: int | None = None
+    require_user_literal: list[Sink] = Field(default_factory=list)  # e.g. [iban, secret]
+    allow_delegation: bool = True
+    confirm_new_payees: bool = True
+    confirm_new_recipients: bool = True
+
+
+def _cap(current: float | int | None, cap: float | int | None):
+    if cap is None:
+        return current
+    return cap if current is None else min(current, cap)
+
+
+def apply_org_policy(contract: IntentContract, policy: OrgPolicy) -> IntentContract:
+    """Returns a narrowed copy of the contract. READ is never removed."""
+    c = contract.model_copy(deep=True)
+    c.allowed_effects = [e for e in c.allowed_effects if e == Effect.READ or e not in policy.blocked_effects]
+    lim = c.limits
+    lim.max_egress_actions = max(0, _cap(lim.max_egress_actions, policy.max_egress_actions))
+    lim.max_payments = max(0, _cap(lim.max_payments, policy.max_payments))
+    lim.max_deletes = max(0, _cap(lim.max_deletes, policy.max_deletes))
+    lim.max_total_amount = _cap(lim.max_total_amount, policy.max_total_amount)
+    lim.max_amount_per_payment = _cap(lim.max_amount_per_payment, policy.max_amount_per_payment)
+    if not policy.allow_delegation:
+        c.delegated_sources = []
+        for s in c.slots:
+            s.kinds = [k for k in s.kinds if k != SlotKind.DELEGATED] or [SlotKind.USER_LITERAL]
+    for sink in policy.require_user_literal:
+        kinds_now = c.kinds_for(sink)
+        narrowed = [SlotKind.USER_LITERAL] if SlotKind.USER_LITERAL in kinds_now else []
+        c.slots = [s for s in c.slots if s.sink != sink]
+        c.slots.append(Slot(sink=sink, kinds=narrowed or [SlotKind.USER_LITERAL], note=f"org policy '{policy.name}': user must type it"))
+    # Confirmation flags can only be switched on by policy, never off.
+    c.confirm_new_payees = c.confirm_new_payees or policy.confirm_new_payees
+    c.confirm_new_recipients = c.confirm_new_recipients or policy.confirm_new_recipients
+    c.policy_source = policy.name
+    c.hash = ""
+    return c
+
+
+ORG_POLICY_ENV = "WARRANT_ORG_POLICY"
+
+
+def load_org_policy(path: str | Path | None = None) -> OrgPolicy | None:
+    """Loads the org policy from `path` or the WARRANT_ORG_POLICY env var (YAML). None if unset.
+
+    A set-but-broken policy raises: running without the limits the operator asked for would fail open.
+    """
+    p = path or os.environ.get(ORG_POLICY_ENV, "").strip()
+    if not p:
+        return None
+    import yaml
+
+    data = yaml.safe_load(Path(p).read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"org policy {p} must be a YAML mapping")
+    data.setdefault("name", Path(p).stem)
+    return OrgPolicy.model_validate(data)
 
 
 class ContractCompiler(BasePipelineElement):
