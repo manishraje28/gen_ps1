@@ -34,6 +34,8 @@ from .ledger import Provenance, ValueLedger, mark_delegation, norm
 from .policy import Effect, Sink, get_policy
 
 ALLOWED, REFUSED, NEEDS_INPUT = "ALLOWED", "REFUSED", "NEEDS_INPUT"
+_IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b")
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _EMBEDDED_RE = re.compile(r"(?:https?://|www\.)[\w.-]+(?:/[\w./?%&=-]*)?|[\w.+-]+@[\w-]+\.[\w.-]+|\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b")
 
 
@@ -49,6 +51,9 @@ class WarrantState:
     deletes: int = 0
     seq: int = 0
     decisions: list[dict] = field(default_factory=list)
+    # The user's own records (contacts, payment history, profile), read once before the run
+    # commits anything, so a payment made during the run can never vouch for itself.
+    records: list["TrustedRecord"] | None = None
 
     def __post_init__(self) -> None:
         if self.ledger is None:
@@ -98,6 +103,46 @@ def state_diff(before: Any, after: Any, path: str = "", out: list | None = None,
     return out
 
 
+# ---------------- trusted records (payee / contact binding) ----------------
+# Words too generic to identify a payee or contact.
+_NAME_STOP = {
+    "from", "with", "this", "that", "your", "yours", "have", "will", "into", "only", "please", "dear", "regards",
+    "thanks", "thank", "payment", "payments", "invoice", "bill", "bills", "amount", "account", "accounts", "bank",
+    "iban", "email", "mail", "date", "subject", "total", "paid", "transfer", "recipient", "sender", "name", "note",
+    "notes", "saved", "payee", "monthly", "month", "year", "recurring", "true", "false", "none", "null", "balance",
+    "details", "number", "customer", "contact", "contacts", "address", "phone", "info", "information", "team",
+    "office", "billing", "support", "service", "services", "company", "limited", "inc", "corp", "new",
+    "updated", "update", "send", "sent", "money", "due", "description",
+}
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{3,}")
+
+
+def _name_tokens(text: str) -> set[str]:
+    stripped = _EMAIL_RE.sub(" ", _IBAN_RE.sub(" ", text))
+    return {w.lower().strip("'-") for w in _WORD_RE.findall(stripped)} - _NAME_STOP
+
+
+@dataclass
+class TrustedRecord:
+    """One entry of the user's own records: the names in it and the IBANs / emails it binds."""
+    tokens: set[str]
+    ibans: set[str]
+    emails: set[str]
+    source: str
+    text: str
+
+
+def records_from_text(text: str, source: str) -> list[TrustedRecord]:
+    """Splits a trusted tool output (YAML list or plain lines) into per-entry records."""
+    out = []
+    for ch in re.split(r"\n(?=- )|\n\s*\n", text):
+        ibans = {m.upper() for m in _IBAN_RE.findall(ch)}
+        emails = {m.lower() for m in _EMAIL_RE.findall(ch)}
+        if ibans or emails:
+            out.append(TrustedRecord(_name_tokens(ch), ibans, emails, source, ch.strip()[:200]))
+    return out
+
+
 def _short(v: Any, n: int = 160) -> Any:
     s = json.dumps(v, default=str)
     return v if len(s) <= n else s[:n] + "…"
@@ -120,7 +165,8 @@ class WarrantGate(BasePipelineElement):
 
     # ---------------- audit ledger ----------------
     def _audit(self, state: WarrantState, record: dict) -> None:
-        record = {"ts": time.time(), "run_id": state.run_id, "contract_hash": state.contract.hash, **record}
+        record = {"ts": time.time(), "run_id": state.run_id, "contract_hash": state.contract.hash,
+                  "policy_source": getattr(state.contract, "policy_source", "") or "", **record}
         path = self.audit_dir / f"{state.run_id}.jsonl"
         if not path.exists():
             head = {"ts": time.time(), "run_id": state.run_id, "type": "contract", "query": state.query, "contract": state.contract.model_dump(mode="json")}
@@ -153,6 +199,10 @@ class WarrantGate(BasePipelineElement):
             if match.kind == SlotKind.DELEGATED and sink == Sink.IBAN and not any(p.kind == SlotKind.TRUSTED for p in good):
                 return {**res, "verdict": NEEDS_INPUT, "code": "NEW_PAYEE",
                         "why": f"'{value}' is a new payee taken from delegated content; needs the user's confirmation"}
+            if sink in (Sink.IBAN, Sink.RECIPIENT) and match.kind in (SlotKind.LOOKUP, SlotKind.DELEGATED):
+                held = self._binding_check(state, sink, value, good)
+                if held is not None:
+                    return {**res, **held}
             return {**res, "verdict": ALLOWED, "kind": match.kind.value, "why": f"warrant: {match.kind.value} ({match.tool or 'user'})"}
         if tainted and not good:
             return {**res, "verdict": REFUSED, "code": "TAINTED_VALUE",
@@ -163,6 +213,74 @@ class WarrantGate(BasePipelineElement):
                     "why": f"'{value}' comes from {', '.join(kinds)} but the contract requires {', '.join(k.value for k in allowed)} for {sink.value}"}
         return {**res, "verdict": REFUSED, "code": "NO_PROVENANCE",
                 "why": f"'{value}' does not appear in the user's request or in any data the agent has read"}
+
+    # ---------------- payee / contact binding ----------------
+    def _load_records(self, state: WarrantState, runtime: FunctionsRuntime, env: Env) -> None:
+        """Reads the user's own records once, before the run commits anything: every READ tool
+        marked trusted_source that needs no arguments, run on a deep copy of the world. The
+        results never reach the planner; they can only make the gate stricter."""
+        if state.records is not None:
+            return
+        records: list[TrustedRecord] = []
+        for name, fn in runtime.functions.items():
+            pol = get_policy(name)
+            if pol.effect != Effect.READ or not pol.trusted_source:
+                continue
+            try:
+                if fn.parameters.model_json_schema().get("required"):
+                    continue
+                result, err = runtime.run_function(env.model_copy(deep=True), name, {})
+                if not err:
+                    records += records_from_text(self.fmt(result), name)
+            except Exception:  # a failed probe only means fewer records; nothing is allowed because of it
+                continue
+        state.records = records
+
+    @staticmethod
+    def _known_records(state: WarrantState) -> list[TrustedRecord]:
+        recs = list(state.records or [])
+        # Trusted outputs the agent itself read (e.g. a contact search). The auditor splits an
+        # output into line spans, so rejoin each call's spans to keep a name next to its address.
+        by_call: dict[str, list] = {}
+        for sp in state.ledger.spans:
+            if sp.trusted_source:
+                by_call.setdefault(sp.call_id, []).append(sp)
+        for spans in by_call.values():
+            recs += records_from_text("\n".join(sp.text for sp in spans), spans[0].tool)
+        return recs
+
+    def _binding_check(self, state: WarrantState, sink: Sink, value: Any, good: list[Provenance]) -> dict | None:
+        """A value taken from documents (LOOKUP / DELEGATED) must not contradict the user's own
+        records. If the document names a payee or contact the user already has but gives a
+        different IBAN or address, someone may be impersonating them (the classic "our bank
+        details changed" fraud). Returns a NEEDS_INPUT verdict, or None if the value is fine."""
+        c = state.contract
+        is_iban = sink == Sink.IBAN
+        v = str(value).strip()
+        key = re.sub(r"\s+", "", v).upper() if is_iban else v.lower()
+        code = "NEW_PAYEE" if is_iban else "NEW_RECIPIENT"
+        records = self._known_records(state)
+        if key in {x for r in records for x in (r.ibans if is_iban else r.emails)}:
+            return None  # already one of the user's own payees / contacts
+        doc_tokens: set[str] = set()
+        for p in good:
+            if p.kind in (SlotKind.LOOKUP, SlotKind.DELEGATED):
+                doc_tokens |= _name_tokens(p.excerpt)
+        for r in records:
+            theirs = r.ibans if is_iban else r.emails
+            shared = sorted(doc_tokens & r.tokens)
+            if theirs and shared:
+                return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
+                        "why": f"'{v}' comes from a document that names '{' '.join(shared[:3])}', but your own records ({r.source}) "
+                               f"have {', '.join(sorted(theirs)[:2])} for them. Possible impersonation: confirm with the user before using the new one"}
+        if is_iban and getattr(c, "confirm_new_payees", None) is True:
+            return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
+                    "why": f"'{v}' is a new payee (not typed by the user, not in their records); the contract asks for confirmation"}
+        if not is_iban and getattr(c, "confirm_new_recipients", None) is True:
+            if _domain(v) not in [d.lower() for d in c.limits.internal_domains]:
+                return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
+                        "why": f"'{v}' is a new external recipient (not typed by the user, not a contact); the contract asks for confirmation"}
+        return None
 
     def _decide(self, state: WarrantState, call: FunctionCall) -> dict:
         pol = get_policy(call.function)
@@ -263,6 +381,7 @@ class WarrantGate(BasePipelineElement):
 
             self.emit("stage", stage="gate", status="active")
             try:
+                self._load_records(state, runtime, env)
                 decision = self._decide(state, call)
             except Exception as exc:  # fail closed
                 decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "INTERNAL_ERROR", "reason": str(exc)}
