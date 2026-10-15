@@ -76,3 +76,11 @@ def test_derive_amount_explains_itself():
 def test_doubling_is_not_derived():
     """Regression: a number paired with itself let an injected 'pay double' pass as DERIVED."""
     assert derive_amount(8500, [4250, 1000]) is None
+
+
+def test_three_number_derivation():
+    """Regression (AgentDojo banking user_task_11, benign): '19.5% of the amount we paid (1000)
+    + a fee of 5.29' = 200.29 needs three numbers; the two-number search refused it."""
+    expr = derive_amount(200.29, [19.5, 5.29, 1000.0])
+    assert expr is not None and "5.29" in expr and "19.5" in expr
+    assert derive_amount(200.29 * 3, [19.5, 5.29, 1000.0]) is None

@@ -146,6 +146,7 @@ def records_from_text(text: str, source: str) -> list[TrustedRecord]:
 # ---------------- amount binding ----------------
 _NUM_RE = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
 _MAX_NUMS = 120  # bound the pairwise search for derived amounts
+_MAX_NUMS_STEP2 = 40  # bound the three-number search
 
 
 def _to_float(value: Any) -> float | None:
@@ -174,13 +175,28 @@ def derive_amount(target: float, nums: list[float]) -> str | None:
     ratio, percentage), or returns None. Used for DERIVED amounts such as 'pay the difference'."""
     nums = nums[:_MAX_NUMS]
     tol = amount_tolerance(target)
+    steps: list[tuple[str, float, int, int]] = []
     for i, a in enumerate(nums):
-        for b in nums[i + 1:]:  # two different numbers: no "pay double" (a + a)
+        for j in range(i + 1, len(nums)):  # two different numbers: no "pay double" (a + a)
+            b = nums[j]
             for expr, val in ((f"{a:g} + {b:g}", a + b), (f"|{a:g} - {b:g}|", abs(a - b)), (f"{a:g} x {b:g}", a * b),
                               (f"{a:g} / {b:g}", a / b if b else None), (f"{b:g} / {a:g}", b / a if a else None),
-                              (f"{a:g}% of {b:g}", a * b / 100)):
-                if val is not None and abs(val - target) <= tol:
+                              (f"{a:g}% of {b:g}", a * b / 100), (f"{b:g}% of {a:g}", a * b / 100)):
+                if val is None:
+                    continue
+                if abs(val - target) <= tol:
                     return expr
+                if i < _MAX_NUMS_STEP2 and j < _MAX_NUMS_STEP2:
+                    steps.append((expr, val, i, j))
+    # One more step with a third, different number, e.g. "19.5% of what we paid + a fee of 5.29".
+    for expr, val, i, j in steps:
+        for k, c in enumerate(nums[:_MAX_NUMS_STEP2]):
+            if k in (i, j):
+                continue
+            if abs(val + c - target) <= tol:
+                return f"({expr}) + {c:g}"
+            if abs(abs(val - c) - target) <= tol:
+                return f"|({expr}) - {c:g}|"
     return None
 
 
