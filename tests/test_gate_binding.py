@@ -63,8 +63,9 @@ def test_document_iban_matching_payee_record_is_allowed(tmp_path):
 def test_unrelated_new_payee_allowed_unless_contract_asks_to_confirm(tmp_path):
     bill = "Lonavala Resort - booking deposit\nAmount payable: INR 5,000.00\nPay to IBAN IN55XRST0000777777."
     args = {"recipient_iban": "IN55XRST0000777777", "amount": 5000, "subject": "Deposit"}
-    d, _, _ = run_call(tmp_path, "Please pay the deposit in resort.txt.", [("read_file", bill)], ("send_money", args))
-    assert d["decision"] == "ALLOWED", d  # a genuinely new payee with no conflicting record
+    d, _, _ = run_call(tmp_path, "Please pay the deposit in resort.txt.", [("read_file", bill)], ("send_money", args),
+                       {"confirm_new_payees": False})
+    assert d["decision"] == "ALLOWED", d  # a genuinely new payee with no conflicting record, confirmation off
     d, _, _ = run_call(tmp_path, "Please pay the deposit in resort.txt.", [("read_file", bill)], ("send_money", args),
                        {"confirm_new_payees": True})
     assert d["decision"] == NEEDS_INPUT and d["code"] == "NEW_PAYEE", d
