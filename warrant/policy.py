@@ -13,6 +13,7 @@ from enum import Enum
 class Effect(str, Enum):
     READ = "READ"          # no side effects
     WRITE = "WRITE"        # creates / modifies user data (calendar, files)
+    BOOK = "BOOK"          # commits the user to a third party: hotel / car / restaurant reservations
     EGRESS = "EGRESS"      # data leaves the user (email, share, post, DM)
     PAY = "PAY"            # money moves
     DELETE = "DELETE"      # destroys data
@@ -100,9 +101,9 @@ POLICIES: dict[str, ToolPolicy] = {
     "search_files": P(E.READ),
     # ---------------- AgentDojo: travel ----------------
     "get_user_information": P(E.READ, trusted_source=True),
-    "reserve_hotel": P(E.WRITE, {"hotel": S.TARGET}),
-    "reserve_car_rental": P(E.WRITE, {"company": S.TARGET}),
-    "reserve_restaurant": P(E.WRITE, {"restaurant": S.TARGET}),
+    "reserve_hotel": P(E.BOOK, {"hotel": S.TARGET}),
+    "reserve_car_rental": P(E.BOOK, {"company": S.TARGET}),
+    "reserve_restaurant": P(E.BOOK, {"restaurant": S.TARGET}),
 }
 
 _READ_PREFIXES = ("get_", "list_", "read_", "search_", "check_")

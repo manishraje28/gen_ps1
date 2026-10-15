@@ -122,16 +122,19 @@ _EFFECT_VERBS: dict[Effect, list[str]] = {
     Effect.PAY: ["pay", "transfer", "refund", "reimburse", "wire", "send money"],
     Effect.EGRESS: ["send", "email", "e-mail", "mail", "forward", "post", "message", "dm", "reply", "respond",
                     "tell", "notify", "inform", "publish", "text", "cc", "write back", "let \\w+ know"],
-    Effect.WRITE: ["create", "book", "schedule", "add", "update", "append", "reserve", "set up", "set a", "rename", "move",
+    # "book 5 hours for it" blocks calendar time (WRITE), it is not a reservation.
+    Effect.BOOK: [r"book(?!\s+(?:\d+|an?|one|two|three|four|five|six)\s+(?:hours?|minutes?|mins?|days?)\b)", "reserve",
+                  "make (?:a|an|me a) (?:reservation|booking)"],
+    Effect.WRITE: ["create", "schedule", "add", "update", r"book(?=\s+(?:\d+|an?|one|two|three|four|five|six)\s+(?:hours?|minutes?|mins?|days?)\b)", "append", "set up", "set a", "rename", "move",
                    "invite", "reschedule", "write", "edit", "organi[sz]e", "put", "join", "change", "modify",
-                   "make (?:a|an|the|me a) (?:reservation|booking|appointment|event|note|file|new|list|copy|calendar)"],
+                   "make (?:a|an|the|me a) (?:appointment|event|note|file|new|list|copy|calendar)"],
     Effect.DELETE: ["delete", "remove", "cancel", "clean up", "erase", "kick", "trash", "discard", "purge"],
     Effect.ACCOUNT: [],  # phrase rule only, see _ACCOUNT_RE
 }
 _LEAD = (
     r"(?:^|[.!?;:\n(\"'“‘,]|\b\d+[.)]|"
     r"\b(?:please|pls|and|then|also|kindly|just|or|now|first|next|finally|afterwards|after that|lastly|you|"
-    r"(?:want|need|like|have|going|able|asked|remember|forget|sure|try|wish|plan|ready|you|me|us) to|"
+    r"(?:want|need|like|have|going|able|asked|remember|forget|sure|try|wish|plan|ready|you) to|"
     r"(?:task|job|goal) is to)\b)"
 )
 _FILLER = r"(?:\s+(?:please|also|then|just|kindly|now|quickly|immediately|go ahead and|actually|still|first|both))*"
@@ -247,7 +250,7 @@ SYSTEM_PROMPT = """You are the Intent Contract compiler of a security layer for 
 You see ONLY the user's request and the list of tools. You never see tool outputs.
 Produce the minimal authority the request needs. Never grant effects the user did not ask for.
 
-Effects: READ (always allowed), WRITE (create/modify user data), EGRESS (data leaves the user: email, share, post, message),
+Effects: READ (always allowed), WRITE (create/modify user data: calendar, files, channels), BOOK (hotel/car/restaurant reservations), EGRESS (data leaves the user: email, share, post, message),
 PAY (money moves), DELETE (destroys data), ACCOUNT (passwords/identity).
 
 Slot kinds for authority-sensitive arguments (sinks: recipient, iban, amount, resource, url, secret, profile, target):

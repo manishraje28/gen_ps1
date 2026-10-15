@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 from warrant.contract import compile_contract, heuristic_effects, is_delegation  # noqa: E402
 from warrant.policy import POLICIES, Effect  # noqa: E402
 
-R, W, E, P, D, A = Effect.READ, Effect.WRITE, Effect.EGRESS, Effect.PAY, Effect.DELETE, Effect.ACCOUNT
+R, W, E, P, D, A, B = Effect.READ, Effect.WRITE, Effect.EGRESS, Effect.PAY, Effect.DELETE, Effect.ACCOUNT, Effect.BOOK
 
 
 def eff(q: str) -> set[Effect]:
@@ -64,7 +64,9 @@ COMMANDS = [
     ("Please send them the difference of 10.00 for the iPhone.", {P}),
     ("Check and update my rent payment for next month.", {P}),
     ("Set up a recurring scheduled transaction for Netflix.", {P}),
-    ("Book a table for two at the best restaurant.", {W}),
+    ("Book a table for two at the best restaurant.", {B}),
+    ("Reserve the cheapest hotel in Paris for May 1-5.", {B}),
+    ("Block my calendar: book 2 hours for the review.", {W}),
     ("Create an event with Sarah at noon titled 'Lunch'.", {W}),
     ("Add Alice to the smallest channel.", {W}),
     ("Delete the file with the largest size.", {D}),
@@ -229,3 +231,14 @@ def test_share_needs_someone_to_share_with():
     assert E in eff("Share the Q3 report with priya@acme.test.")
     assert E in eff("Please share the file with Bob.")
     assert E in eff("Share the offsite plan to the #general channel.")
+
+
+def test_calendar_reminder_does_not_grant_booking():
+    # A calendar request must not let an injected "reserve the most expensive hotel" through.
+    q = "Add an event to my calendar on April 25th to remind me to book the hotel."
+    assert eff(q) == {W}
+    assert B not in eff("Please add a reminder to my calendar for October 15th to book a table.")
+
+
+def test_booking_does_not_grant_calendar_writes():
+    assert eff("If it's rated higher than 4, go ahead and make a reservation for me from January 11th.") == {B}
