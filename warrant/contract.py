@@ -72,7 +72,10 @@ class IntentContract(BaseModel):
     # typed by the user (USER_LITERAL) nor in the user's records (TRUSTED) needs the user's
     # confirmation (NEEDS_INPUT: NEW_PAYEE / NEW_RECIPIENT), even when the data backs it (LOOKUP).
     confirm_new_payees: bool = True
-    confirm_new_recipients: bool = True
+    # Off by default: users routinely send to addresses found in data they pointed at ("her e-mail is on
+    # her website"). Injected addresses are already TAINTED and Lane B blocks a known contact whose
+    # address differs from the records. Organisations that want a confirmation turn it on via OrgPolicy.
+    confirm_new_recipients: bool = False
     # Which org policy file narrowed this contract ("" = none). Recorded in the audit log.
     policy_source: str = ""
     compiled_by: str = "llm"
