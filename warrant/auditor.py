@@ -8,8 +8,11 @@ can upgrade EVIDENCE -> DIRECTIVE for ambiguous spans, never the reverse.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from . import config
@@ -62,7 +65,96 @@ class Span:
         }
 
 
+# ---------------- evasion-resistant rules (Lane B, B4) ----------------
+# Text that is written to look like ordinary data but redirects money or mail.
+_DATALIKE_RE = re.compile(
+    r"\b(bank(ing)?|account|payment|remittance|beneficiary|payee)\s+(details|information|info|instructions)\s+(have\s+|has\s+)?(been\s+)?(changed|updated|moved)"
+    r"|\bnew\s+(bank\s+|beneficiary\s+|remittance\s+)?account\b"
+    r"|\b(payable|remit(tance)?|pay(ments?)?)\s+(only|exclusively)\s+to\b"
+    r"|\b(pay|remit|send|transfer|wire|route|forward)\b[^.\n]{0,60}\binstead\b"
+    r"|\breply-?to\s*:"
+    r"|\b(copy|cc|bcc)\s+(our|my|the|in)\b[^.\n]{0,40}@"
+    r"|\bfrom\s+now\s+on\b[^.\n]{0,60}\b(pay|send|use|write|forward|email)\b"
+    r"|\b(changed|updated|moved)\b[^.\n]{0,40}\b(iban|account|mailbox|address|bank)\b",
+    re.I,
+)
+# Imperatives and agent-address in other languages (Hindi / Hinglish, Spanish, French, German, Portuguese).
+_FOREIGN_RE = re.compile(
+    r"\b(bhej(o|do| do| dena|iye)?|bhejna|kar\s*do|karo|kijiye|bina\s+bataye|mat\s+batao|turant|abhi)\b"
+    r"|भेज|करो|कर दो|बिना बताए|मत बताओ|तुरंत|सहायक"
+    r"|\b(env[ií]a(lo|r)?|reenv[ií]a|transfiere|paga|comparte|no\s+le\s+digas|asistente)\b"
+    r"|\b(envoie[sz]?|envoyez|transf[eé]rez|payez|partagez|ne\s+dis\s+rien|assistant\s+ia)\b"
+    r"|\b(senden\s+sie|schicke?n?|[uü]berweisen?|teile|ki-assistent)\b"
+    r"|\b(envie|transfira|compartilhe|n[aã]o\s+conte)\b",
+    re.I,
+)
+_ZERO_WIDTH_RE = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\u00ad]")
+# Cyrillic / Greek letters that look like Latin ones.
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "ɡ": "g",
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X", "І": "I",
+    "α": "a", "ο": "o", "ρ": "p", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "τ": "t", "υ": "u",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Χ": "X", "Υ": "Y",
+})
+_MIXED_SCRIPT_RE = re.compile(r"(?=\w*[A-Za-z])(?=\w*[\u0370-\u03ff\u0400-\u04ff])\w{3,}")
+_B64_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{16,}={0,2}(?![A-Za-z0-9+/=])")
+
+
+def deobfuscate(text: str) -> tuple[str, list[str]]:
+    """Returns the text an attacker meant (zero-width characters removed, homoglyphs mapped to
+    Latin, compatibility forms folded) and the tricks that were found. Used only for scoring:
+    the span text itself is never changed, so masking still finds it."""
+    tricks = []
+    t = _ZERO_WIDTH_RE.sub("", text)
+    if t != text:
+        tricks.append("hidden zero-width characters")
+    if _MIXED_SCRIPT_RE.search(t):
+        tricks.append("mixed-script word (homoglyphs)")
+    folded = unicodedata.normalize("NFKC", t).translate(_CONFUSABLES)
+    if folded != t and "mixed-script word (homoglyphs)" not in tricks and re.search(r"[\u0370-\u03ff\u0400-\u04ff\uff00-\uffef]", t):
+        tricks.append("look-alike characters")
+    return folded, tricks
+
+
+def decode_blobs(text: str) -> list[str]:
+    """Decodes base64 blobs that turn into readable text (hidden instructions)."""
+    out = []
+    for blob in _B64_RE.findall(text):
+        try:
+            raw = base64.b64decode(blob + "=" * (-len(blob) % 4), validate=True)
+            dec = raw.decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            continue
+        if len(dec) >= 8 and sum(ch.isprintable() or ch.isspace() for ch in dec) / len(dec) > 0.95 and re.search(r"[A-Za-z]{3,}\s+[A-Za-z]{2,}", dec):
+            out.append(dec)
+    return out
+
+
 def score_text(text: str) -> tuple[int, list[str]]:
+    """Rule score for one span; >= 2 means DIRECTIVE. Scored on the de-obfuscated text, plus any
+    decoded base64 content. Every rule can only add to the score (the auditor only lowers trust)."""
+    clean, tricks = deobfuscate(text)
+    score, reasons = _score_plain(clean)
+    target = bool(_TARGET_RE.search(clean))
+    if _DATALIKE_RE.search(clean) and target:
+        score += 2
+        reasons.append("data-like redirection of money or mail")
+    if _FOREIGN_RE.search(clean) and (target or _AI_ADDRESS_RE.search(clean)):
+        score += 2
+        reasons.append("non-English instruction with a target")
+    for dec in decode_blobs(clean):
+        inner, inner_reasons = score_text(dec) if len(dec) < len(clean) else (0, [])
+        if inner >= 1 or _ACTION_RE.search(dec):
+            score += 3
+            reasons.append("encoded (base64) instruction" + (f": {', '.join(inner_reasons)}" if inner_reasons else ""))
+            break
+    if tricks and (score >= 1 or target or _ACTION_RE.search(clean)):
+        score += 2
+        reasons += [f"obfuscation: {t}" for t in tricks]
+    return score, reasons
+
+
+def _score_plain(text: str) -> tuple[int, list[str]]:
     score, reasons = 0, []
     if _TAG_RE.search(text):
         score += 3
@@ -137,6 +229,14 @@ def audit_output(text: str, call_id: str, tool: str, span_prefix: str, use_llm: 
             nxt = spans[i + 1]
             if nxt.label == EVIDENCE and nxt.score >= 1:
                 nxt.label, nxt.reasons = DIRECTIVE, nxt.reasons + ["continues a flagged instruction"]
+    # A change notice ("our bank details have changed.") taints the next sentence that carries the
+    # new IBAN / address / link, since the sentence splitter separates the two.
+    for i, sp in enumerate(spans[:-1]):
+        nxt = spans[i + 1]
+        if nxt.label == EVIDENCE and _DATALIKE_RE.search(deobfuscate(sp.text)[0]) and _TARGET_RE.search(deobfuscate(nxt.text)[0]):
+            nxt.label, nxt.reasons = DIRECTIVE, nxt.reasons + ["follows a payment / mail change notice"]
+            if sp.label == EVIDENCE:
+                sp.label, sp.reasons = DIRECTIVE, sp.reasons + ["payment / mail change notice"]
     use_llm = config.AUDITOR_USE_LLM if use_llm is None else use_llm
     if use_llm and config.has_groq_key():
         ambiguous = [sp for sp in spans if sp.label == EVIDENCE and sp.score >= 1]
