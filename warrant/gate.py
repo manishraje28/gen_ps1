@@ -30,7 +30,7 @@ from . import config
 from .auditor import DIRECTIVE, audit_output, mask_text
 from .contract import IntentContract, SlotKind
 from .events import NULL_EMITTER, Emitter
-from .ledger import Provenance, ValueLedger, mark_delegation, norm
+from .ledger import Provenance, ValueLedger, _text_has_value, mark_delegation, norm
 from .policy import Effect, Sink, get_policy
 
 ALLOWED, REFUSED, NEEDS_INPUT = "ALLOWED", "REFUSED", "NEEDS_INPUT"
@@ -189,6 +189,95 @@ def _short(v: Any, n: int = 160) -> Any:
     return v if len(s) <= n else s[:n] + "…"
 
 
+def append_audit(audit_dir, state: WarrantState, record: dict, emit: Emitter = NULL_EMITTER) -> None:
+    """Appends one record to the run's JSONL audit log (the first line is the frozen contract)."""
+    record = {"ts": time.time(), "run_id": state.run_id, "contract_hash": state.contract.hash,
+              "policy_source": getattr(state.contract, "policy_source", "") or "", **record}
+    path = audit_dir / f"{state.run_id}.jsonl"
+    if not path.exists():
+        head = {"ts": time.time(), "run_id": state.run_id, "type": "contract", "query": state.query, "contract": state.contract.model_dump(mode="json")}
+        path.write_text(json.dumps(head, default=str) + "\n", encoding="utf-8")
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+    emit("audit", record={k: _short(v, 300) for k, v in record.items()})
+
+
+# ---------------- final-answer guard ----------------
+_ANSWER_VALUE_RE = re.compile(
+    r"(?:https?://|www\.)[^\s<>\"'`)\]]+"          # links
+    r"|[\w.+-]+@[\w-]+(?:\.[\w-]+)+"                # email addresses
+    r"|\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}\b"   # IBANs, also printed in groups of four
+)
+_REDACT_LABEL = {"url": "link", "email": "email address", "iban": "IBAN"}
+
+
+def _value_type(v: str) -> str:
+    if "@" in v and not v.lower().startswith(("http", "www")):
+        return "email"
+    if v.lower().startswith(("http", "www")):
+        return "url"
+    return "iban"
+
+
+def redact_answer(text: str, state: WarrantState) -> tuple[str, list[dict]]:
+    """Removes links, email addresses and IBANs from the agent's final answer unless they carry a
+    warrant: the user typed them, or they appear in data the agent read that was NOT flagged as
+    instructions. This stops an injection from reaching the user through the answer itself
+    (a phishing link, a "call this number / pay this IBAN" message, or a data-exfiltration URL)."""
+    redactions: list[dict] = []
+
+    def judge(m: re.Match) -> str:
+        v = m.group(0).rstrip(".,;:!?")
+        tail = m.group(0)[len(v):]
+        if _text_has_value(state.query, v):
+            return m.group(0)
+        seen = [sp for sp in state.ledger.spans if _text_has_value(sp.text, v)]
+        if any(sp.label != DIRECTIVE for sp in seen):
+            return m.group(0)
+        kind = _value_type(v)
+        why = (f"only appears in instruction-like text (span {seen[0].id})" if seen
+               else "does not appear in your request or in any data the agent read")
+        redactions.append({"value": v, "type": kind, "why": why})
+        return f"[{_REDACT_LABEL[kind]} removed by WARRANT: {why.split(' (')[0]}]" + tail
+
+    return _ANSWER_VALUE_RE.sub(judge, text), redactions
+
+
+class AnswerGuard(BasePipelineElement):
+    """Last pipeline element: checks the final answer before the user sees it.
+
+    Place it after the ToolsExecutionLoop of a WARRANT pipeline. Without a WarrantState
+    (no contract) it redacts every link, address and IBAN that the user did not type: fail closed.
+    """
+
+    def __init__(self, emit: Emitter = NULL_EMITTER, audit_dir=None) -> None:
+        self.emit = emit
+        self.audit_dir = audit_dir or config.AUDIT_DIR
+
+    def query(self, query, runtime, env=EmptyEnv(), messages=[], extra_args={}):
+        if not messages or messages[-1]["role"] != "assistant" or messages[-1].get("tool_calls"):
+            return query, runtime, env, messages, extra_args
+        state: WarrantState | None = extra_args.get("warrant")
+        if state is None:
+            from .contract import compile_contract
+
+            state = WarrantState(query=query, contract=compile_contract(query, list(runtime.functions.keys()), use_llm=False))
+        last = messages[-1]
+        blocks, found = [], []
+        for block in last.get("content") or []:
+            if isinstance(block, dict) and isinstance(block.get("content"), str):
+                new_text, red = redact_answer(block["content"], state)
+                found += red
+                block = {**block, "content": new_text}
+            blocks.append(block)
+        if not found:
+            return query, runtime, env, messages, extra_args
+        self.emit("answer_guard", redactions=found)
+        append_audit(self.audit_dir, state, {"type": "answer", "decision": "REDACTED", "code": "UNWARRANTED_IN_ANSWER",
+                                             "redactions": found}, self.emit)
+        return query, runtime, env, [*messages[:-1], {**last, "content": blocks}], extra_args
+
+
 class WarrantGate(BasePipelineElement):
     def __init__(
         self,
@@ -206,15 +295,7 @@ class WarrantGate(BasePipelineElement):
 
     # ---------------- audit ledger ----------------
     def _audit(self, state: WarrantState, record: dict) -> None:
-        record = {"ts": time.time(), "run_id": state.run_id, "contract_hash": state.contract.hash,
-                  "policy_source": getattr(state.contract, "policy_source", "") or "", **record}
-        path = self.audit_dir / f"{state.run_id}.jsonl"
-        if not path.exists():
-            head = {"ts": time.time(), "run_id": state.run_id, "type": "contract", "query": state.query, "contract": state.contract.model_dump(mode="json")}
-            path.write_text(json.dumps(head, default=str) + "\n", encoding="utf-8")
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, default=str) + "\n")
-        self.emit("audit", record={k: _short(v, 300) for k, v in record.items()})
+        append_audit(self.audit_dir, state, record, self.emit)
 
     # ---------------- per-argument warrant check ----------------
     def _check_value(self, state: WarrantState, tool: str, arg: str, sink: Sink, value: Any) -> dict:
