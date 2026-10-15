@@ -143,6 +143,47 @@ def records_from_text(text: str, source: str) -> list[TrustedRecord]:
     return out
 
 
+# ---------------- amount binding ----------------
+_NUM_RE = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
+_MAX_NUMS = 120  # bound the pairwise search for derived amounts
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _numbers(text: str) -> list[float]:
+    out = []
+    for m in _NUM_RE.findall(text):
+        f = _to_float(m)
+        if f is not None and f not in out:
+            out.append(f)
+    return out
+
+
+def amount_tolerance(x: float) -> float:
+    """Rounding slack only: 0.1% of the amount, at least one paisa / cent."""
+    return max(0.01, abs(x) * 0.001)
+
+
+def derive_amount(target: float, nums: list[float]) -> str | None:
+    """Explains target as a simple computation over known numbers (sum, difference, product,
+    ratio, percentage), or returns None. Used for DERIVED amounts such as 'pay the difference'."""
+    nums = nums[:_MAX_NUMS]
+    tol = amount_tolerance(target)
+    for i, a in enumerate(nums):
+        for b in nums[i + 1:]:  # two different numbers: no "pay double" (a + a)
+            for expr, val in ((f"{a:g} + {b:g}", a + b), (f"|{a:g} - {b:g}|", abs(a - b)), (f"{a:g} x {b:g}", a * b),
+                              (f"{a:g} / {b:g}", a / b if b else None), (f"{b:g} / {a:g}", b / a if a else None),
+                              (f"{a:g}% of {b:g}", a * b / 100)):
+                if val is not None and abs(val - target) <= tol:
+                    return expr
+    return None
+
+
 def _short(v: Any, n: int = 160) -> Any:
     s = json.dumps(v, default=str)
     return v if len(s) <= n else s[:n] + "…"
@@ -282,6 +323,55 @@ class WarrantGate(BasePipelineElement):
                         "why": f"'{v}' is a new external recipient (not typed by the user, not a contact); the contract asks for confirmation"}
         return None
 
+    def _check_amount(self, state: WarrantState, arg: str, value: Any) -> dict:
+        """An amount must be bound to something: a number the user typed, a number in their own
+        records or in evidence (within rounding tolerance), or a simple computation over those
+        (DERIVED). A number that only appears in instruction-like text is TAINTED."""
+        c = state.contract
+        allowed = c.kinds_for(Sink.AMOUNT)
+        res = {"arg": arg, "sink": Sink.AMOUNT.value, "value": _short(value, 40), "allowed_kinds": [k.value for k in allowed]}
+        x = _to_float(value)
+        if x is None:
+            return {**res, "provenance": [], "verdict": REFUSED, "code": "SLOT_MISMATCH", "why": f"amount '{value}' is not a number"}
+        tol = amount_tolerance(x)
+        pools: dict[SlotKind, list[tuple[float, Provenance]]] = {}
+
+        def add(kind: SlotKind, text: str, prov: Provenance) -> None:
+            for n in _numbers(text):
+                pools.setdefault(kind, []).append((n, prov))
+
+        add(SlotKind.USER_LITERAL, state.query, Provenance(SlotKind.USER_LITERAL, "USER", None, "user_request", state.query))
+        tainted: list[Provenance] = []
+        for sp in state.ledger.spans:
+            if sp.label == DIRECTIVE:
+                if any(abs(n - x) <= tol for n in _numbers(sp.text)):
+                    tainted.append(Provenance(None, DIRECTIVE, sp.id, sp.tool, sp.text))
+                continue
+            prov_kind = SlotKind.TRUSTED if sp.trusted_source else SlotKind.LOOKUP
+            add(prov_kind, sp.text, Provenance(prov_kind, "EVIDENCE", sp.id, sp.tool, sp.text))
+            if sp.delegated:
+                add(SlotKind.DELEGATED, sp.text, Provenance(SlotKind.DELEGATED, "EVIDENCE", sp.id, sp.tool, sp.text))
+        for kind in (SlotKind.USER_LITERAL, SlotKind.TRUSTED, SlotKind.LOOKUP, SlotKind.DELEGATED):
+            if kind not in allowed:
+                continue
+            for n, prov in pools.get(kind, []):
+                if abs(n - x) <= tol:
+                    return {**res, "provenance": [prov.as_dict()], "verdict": ALLOWED, "kind": kind.value,
+                            "why": f"warrant: {kind.value} ({prov.tool or 'user'})"}
+        if SlotKind.DERIVED in allowed:
+            known = [n for kind in (SlotKind.USER_LITERAL, SlotKind.TRUSTED, SlotKind.LOOKUP, SlotKind.DELEGATED)
+                     if kind in allowed for n, _ in pools.get(kind, [])]
+            # the user's own numbers first, so their arithmetic wins over coincidences in documents
+            expr = derive_amount(x, list(dict.fromkeys(known)))
+            if expr is not None:
+                return {**res, "provenance": [{"kind": "DERIVED", "label": "DERIVED", "span": None, "tool": None, "excerpt": expr}],
+                        "verdict": ALLOWED, "kind": SlotKind.DERIVED.value, "why": f"warrant: DERIVED ({expr})"}
+        if tainted:
+            return {**res, "provenance": [p.as_dict() for p in tainted[:2]], "verdict": REFUSED, "code": "TAINTED_VALUE",
+                    "why": f"amount {x:g} only appears inside instruction-like text in untrusted data (span {tainted[0].span_id})"}
+        return {**res, "provenance": [], "verdict": REFUSED, "code": "SLOT_MISMATCH",
+                "why": f"amount {x:g} is not in the user's request, their records or the data read, and is not computed from them"}
+
     def _decide(self, state: WarrantState, call: FunctionCall) -> dict:
         pol = get_policy(call.function)
         c = state.contract
@@ -291,7 +381,10 @@ class WarrantGate(BasePipelineElement):
                     "reason": f"{pol.effect.value} is not in the Intent Contract (allowed: {', '.join(e.value for e in c.allowed_effects)})"}
         for arg, sink in pol.sinks.items():
             for v in _values(call.args.get(arg)):
-                decision["checks"].append(self._check_value(state, call.function, arg, sink, v))
+                if sink == Sink.AMOUNT:
+                    decision["checks"].append(self._check_amount(state, arg, v))
+                else:
+                    decision["checks"].append(self._check_value(state, call.function, arg, sink, v))
         # Content check: links / addresses / IBANs embedded in free-text arguments of
         # side-effecting calls must not originate only from injected instructions.
         if pol.effect != Effect.READ:
@@ -321,6 +414,9 @@ class WarrantGate(BasePipelineElement):
                     amt = float(call.args.get(key, 0) or 0)
                 except (TypeError, ValueError):
                     amt = 0.0
+            cap = getattr(lim, "max_amount_per_payment", None)
+            if cap is not None and amt > float(cap) + 1e-6:
+                return False, f"amount {amt:g} exceeds the per-payment limit {float(cap):g}"
             if state.payments + 1 > lim.max_payments:
                 return False, f"payment count exceeded ({lim.max_payments} per request)"
             if lim.max_total_amount is not None and state.paid_total + amt > lim.max_total_amount + 1e-6:
