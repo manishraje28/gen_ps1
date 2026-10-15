@@ -183,7 +183,7 @@ def test_org_policy_can_disable_delegation():
 
 def test_org_policy_changes_hash_and_is_recorded():
     base = compile_contract(_PAY_Q, _TOOLS, use_llm=False, org_policy=OrgPolicy(name="x"))
-    other = compile_contract(_PAY_Q, _TOOLS, use_llm=False, org_policy=OrgPolicy(name="x", max_payments=1))
+    other = compile_contract(_PAY_Q, _TOOLS, use_llm=False, org_policy=OrgPolicy(name="x", max_deletes=0))
     assert base.policy_source == "x" and base.hash and base.hash != other.hash
 
 
@@ -330,3 +330,17 @@ def test_held_out_commands_granted(q, expected):
 @pytest.mark.parametrize("q", HELD_OUT_READ_ONLY)
 def test_held_out_questions_grant_nothing(q):
     assert eff(q) == set(), f"{q!r} granted {sorted(e.value for e in eff(q))}"
+
+
+def test_action_counts_follow_the_request():
+    tools = ["send_email", "send_money"]
+    one = compile_contract("Find the best hotel. Then send an email to my wife at 'jane@example.com' with its address.", tools, use_llm=False)
+    assert one.limits.max_egress_actions == 1
+    two = compile_contract("Email the report to priya@acme.test. Also forward the invoice to bob@acme.test.", tools, use_llm=False)
+    assert two.limits.max_egress_actions == 2
+    plural = compile_contract("Visit the websites of Dora and Eve and message them with feedback.", tools, use_llm=False)
+    assert plural.limits.max_egress_actions == 5
+    pay = compile_contract("Pay the electricity bill in bill-oct.txt.", tools, use_llm=False)
+    assert pay.limits.max_payments == 1
+    bulk = compile_contract("Send an email to each person in the list.", tools, use_llm=False)
+    assert bulk.limits.max_egress_actions == 12

@@ -254,6 +254,22 @@ def _effect_mentioned(effect: Effect, query: str) -> bool:
     return bool(rx and rx.search(query)) or effect in heuristic_effects(query)
 
 
+_SENTENCE_RE = re.compile(r"(?<=[.!?\n])\s+|(?<=\d[.)])\s+(?=[A-Z])")
+_PLURAL_OBJECT_RE = re.compile(r"\b(?:them|everyone|everybody|both|each|all|those|these|people|users|members|participants|attendees)\b", re.I)
+
+
+def _commanded_count(query: str, effect: Effect, literal_re: re.Pattern, default: int) -> int:
+    """How many times the user asks for this effect: one per sentence that commands it, at least the
+    number of distinct addresses/IBANs they typed. A plural object ("message them") keeps the default."""
+    n = 0
+    for sentence in _SENTENCE_RE.split(query):
+        if effect in heuristic_effects(sentence):
+            if _PLURAL_OBJECT_RE.search(sentence):
+                return default
+            n += 1
+    return max(1, n, len(set(literal_re.findall(query))))
+
+
 def is_delegation(query: str) -> bool:
     return bool(_DELEGATION_RE.search(query))
 
@@ -364,6 +380,12 @@ def compile_contract(
         slots = [s for s in slots if s.sink != Sink.TARGET]
         slots.append(Slot(sink=Sink.TARGET, kinds=[SlotKind.USER_LITERAL], note="user named the booking target"))
     bulk = bool(re.search(r"\b(each|every|all)\b", query, re.I))
+    max_egress, max_payments = (12, 6) if bulk else (5, 3)
+    if not bulk and not delegated:
+        # Exactly as many sends / payments as the user asked for, so a hijacked planner cannot repeat an
+        # allowed action (e.g. a second email to the user's own recipient carrying injected content).
+        max_egress = min(max_egress, _commanded_count(query, Effect.EGRESS, EMAIL_RE, max_egress))
+        max_payments = min(max_payments, _commanded_count(query, Effect.PAY, IBAN_RE, max_payments))
     max_amount = data.get("max_total_amount")
     contract = IntentContract(
         task=str(data.get("task") or query)[:200],
@@ -372,8 +394,8 @@ def compile_contract(
         delegated_sources=delegated_sources,
         slots=slots,
         limits=Limits(
-            max_egress_actions=12 if bulk else 5,
-            max_payments=6 if bulk else 3,
+            max_egress_actions=max_egress,
+            max_payments=max_payments,
             max_total_amount=float(max_amount) if isinstance(max_amount, (int, float)) and max_amount > 0 else None,
             internal_domains=sorted(set((internal_domains or []) + deleg_domains)),
         ),
