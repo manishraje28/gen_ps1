@@ -123,7 +123,7 @@ _EFFECT_VERBS: dict[Effect, list[str]] = {
     Effect.EGRESS: ["send", "email", "e-mail", "mail", "forward", "share", "post", "message", "dm", "reply", "respond",
                     "tell", "notify", "inform", "publish", "text", "cc", "write back", "let \\w+ know"],
     Effect.WRITE: ["create", "book", "schedule", "add", "update", "append", "reserve", "set up", "set a", "rename", "move",
-                   "invite", "reschedule", "write", "edit", "rent", "organi[sz]e", "put", "join", "change", "modify",
+                   "invite", "reschedule", "write", "edit", "organi[sz]e", "put", "join", "change", "modify",
                    "make (?:a|an|the|me a) (?:reservation|booking|appointment|event|note|file|new|list|copy|calendar)"],
     Effect.DELETE: ["delete", "remove", "cancel", "clean up", "erase", "kick", "trash", "discard", "purge"],
     Effect.ACCOUNT: [],  # phrase rule only, see _ACCOUNT_RE
