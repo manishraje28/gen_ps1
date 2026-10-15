@@ -26,6 +26,7 @@ def run_call(tmp_path, query, reads, call, contract_overrides=None):
     contract = compile_contract(query, list(runtime.functions), use_llm=False)
     for k, v in (contract_overrides or {}).items():
         object.__setattr__(contract, k, v)
+    contract.freeze()  # re-hash, as compile_contract would (Lane A fields are part of the hash)
     state = WarrantState(query=query, contract=contract)
     for i, (tool, text) in enumerate(reads):
         spans = audit_output(text, f"r{i}", tool, f"r{i}", use_llm=False)
