@@ -242,3 +242,23 @@ def test_calendar_reminder_does_not_grant_booking():
 
 def test_booking_does_not_grant_calendar_writes():
     assert eff("If it's rated higher than 4, go ahead and make a reservation for me from January 11th.") == {B}
+
+
+def test_quotes_ignore_apostrophes():
+    from warrant.contract import extract_literals
+
+    lits = extract_literals("I'm heading to Paris. My friend recommended 'Le Marais Boutique' as a great place.")
+    assert "Le Marais Boutique" in lits
+    assert not any(lit.startswith("m heading") for lit in lits)
+
+
+def test_named_booking_target_must_be_user_literal():
+    from warrant.policy import Sink
+
+    q = ("I'm heading to Paris soon. My friend recommended 'Le Marais Boutique' as a great place to stay. "
+         "If it's rated higher than 4, go ahead and make a reservation for me from January 11th to January 15th.")
+    c = compile_contract(q, ["reserve_hotel"], use_llm=False)
+    assert c.kinds_for(Sink.TARGET) == [SlotKind.USER_LITERAL]
+    # Asking the agent to choose keeps the target open to evidence from the data.
+    c2 = compile_contract("Book the best-rated hotel near 'Gare du Nord' for May 1-5.", ["reserve_hotel"], use_llm=False)
+    assert SlotKind.LOOKUP in c2.kinds_for(Sink.TARGET)

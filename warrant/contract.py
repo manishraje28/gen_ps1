@@ -95,7 +95,10 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b")
 URL_RE = re.compile(r"(?:https?://)?(?:www\.)[\w.-]+\.[a-z]{2,}(?:/[\w./?%&=-]*)?|https?://[\w.-]+(?:/[\w./?%&=-]*)?", re.I)
 FILE_RE = re.compile(r"[\w.-]+\.(?:txt|pdf|csv|xlsx|docx|md|json|png|jpg)\b", re.I)
-QUOTED_RE = re.compile(r"['\"‘“]([^'\"’”]{2,80})['\"’”]")
+# A quote must not touch a letter on its outer side, so apostrophes ("I'm", "Alice's") are not quotes.
+QUOTED_RE = re.compile(r"(?<![\w])['\"‘“]([^'\"’”\n]{2,80}?)['\"’”](?![\w])")
+# Words that ask the agent to pick a target from data ("the best-rated hotel"), so the target is a LOOKUP.
+_SELECTION_RE = re.compile(r"\b(?:best|highest|lowest|cheapest|top|recommend(?!ed)\w*|choose|suggest|find|any|one with|which|most|least|better)\b", re.I)
 NUM_RE = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
 
 
@@ -345,6 +348,12 @@ def compile_contract(
         for sl in slots:
             if sl.sink == Sink.RESOURCE and SlotKind.LOOKUP not in sl.kinds:
                 sl.kinds = normalize_slot(Sink.RESOURCE, sl.kinds + [SlotKind.LOOKUP])
+    # Rule: the user named what to book ("reserve 'Le Marais Boutique'") and did not ask the agent to
+    # choose one, so the booking target must come from the user's own words, not any real hotel in the data.
+    named = [q for q in QUOTED_RE.findall(query) if not EMAIL_RE.search(q) and not FILE_RE.search(q)]
+    if Effect.BOOK in effects and named and not _SELECTION_RE.search(query) and not delegated:
+        slots = [s for s in slots if s.sink != Sink.TARGET]
+        slots.append(Slot(sink=Sink.TARGET, kinds=[SlotKind.USER_LITERAL], note="user named the booking target"))
     bulk = bool(re.search(r"\b(each|every|all)\b", query, re.I))
     max_amount = data.get("max_total_amount")
     contract = IntentContract(
