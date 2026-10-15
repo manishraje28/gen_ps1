@@ -122,16 +122,20 @@ def extract_literals(text: str) -> list[str]:
 # position: at the start of a clause, after "please / and / then / can you ...", or after
 # "want to / need to / remember to ...". Nouns and questions about data grant READ only.
 _EFFECT_VERBS: dict[Effect, list[str]] = {
-    Effect.PAY: ["pay", "transfer", "refund", "reimburse", "wire", "send money"],
+    Effect.PAY: ["pay", "transfer", "refund", "reimburse", "wire", "send money", "settle", "top up",
+                 r"make (?:a|the|an?\s+\w+) payment", r"cover(?=(?:\s+\S+){0,3}?\s+(?:bill|invoice|rent|fee|cost|payment)s?\b)"],
     Effect.EGRESS: ["send", "email", "e-mail", "mail", "forward", "post", "message", "dm", "reply", "respond",
-                    "tell", "notify", "inform", "publish", "text", "cc", "write back", "let \\w+ know"],
+                    "tell", "notify", "inform", "publish", "text", "cc", "write back", "let \\w+ know",
+                    "shoot", "ping", "loop in", r"drop (?:\w+ )?an? (?:line|note|message|email)"],
     # "book 5 hours for it" blocks calendar time (WRITE), it is not a reservation.
     Effect.BOOK: [r"book(?!\s+(?:\d+|an?|one|two|three|four|five|six)\s+(?:hours?|minutes?|mins?|days?)\b)", "reserve",
-                  "make (?:a|an|me a) (?:reservation|booking)"],
+                  "make (?:a|an|me a) (?:reservation|booking)",
+                  r"(?:grab|get|find|snag|secure) (?:me|us) an? (?:\w+ )?(?:room|table|car|seat|suite|spot|rental)", r"rent (?:me|us)"],
     Effect.WRITE: ["create", "schedule", "add", "update", r"book(?=\s+(?:\d+|an?|one|two|three|four|five|six)\s+(?:hours?|minutes?|mins?|days?)\b)", "append", "set up", "set a", "rename", "move",
                    "invite", "reschedule", "write", "edit", "organi[sz]e", "put", "join", "change", "modify",
                    "make (?:a|an|the|me a) (?:appointment|event|note|file|new|list|copy|calendar)"],
-    Effect.DELETE: ["delete", "remove", "cancel", "clean up", "erase", "kick", "trash", "discard", "purge"],
+    Effect.DELETE: ["delete", "remove", "cancel", "clean up", "erase", "kick", "trash", "discard", "purge",
+                    "get rid of", "clear out", "empty", "wipe"],
     Effect.ACCOUNT: [],  # phrase rule only, see _ACCOUNT_RE
 }
 _LEAD = (
@@ -157,12 +161,17 @@ _PAY_OBJECT_RE = re.compile(
 _ACCOUNT_RE = re.compile(
     _LEAD + _FILLER + r"\s*(?:update|change|reset|set|edit|modify|correct)\s+(?:my|our|the user's|the account|the)\s+(?:\S+\s+){0,2}?"
     r"(?:password|passcode|pin|address|account (?:info|information|details|settings)|user (?:info|information|details)|"
-    r"profile|personal (?:info|information|details)|(?:first |last )?name|street|city|phone number|e-?mail address)\b", re.I)
+    r"profile|personal (?:info|information|details)|(?:first |last )?name|street|city|phone number|e-?mail address)\b|"
+    # "My new address is 12 Elm St, please update it."
+    r"\bmy new (?:password|passcode|pin|address|phone number|e-?mail address|name)\b[^.?!\n]{0,80}?\b(?:update|change|set|use)\b|"
+    r"\b(?:update|change|set)\b[^.?!\n]{0,40}?\bto my new (?:password|address|phone number|e-?mail address|name)\b", re.I)
 # Passive or noun-phrase egress the verb rule cannot see: "a summary to X", "should be emailed to X".
 _EGRESS_EXTRA_RE = re.compile(
     r"\b(?:summary|report|copy|message|note|e-?mail|invitation)\s+to\s+(?:[\w.+-]+@[\w-]+|my |our |the |his |her |their |[A-Z][a-z]+)|"
     r"\b(?:should|must|to|will|please|needs? to|has to|have to)\s+(?:be|get)\s+(?:sent|e-?mailed|forwarded|shared|posted|messaged)\b|"
-    r"\bwrite\b(?:\s+\S+){0,3}?\s+(?:the |a |an )?(?:following )?(?:message|e-?mail|reply|dm|post|note to)\b", re.I)
+    r"\bwrite\b(?:\s+\S+){0,3}?\s+(?:the |a |an )?(?:following )?(?:message|e-?mail|reply|dm|post|note to)\b|"
+    # "get the report over to priya@acme.test", "pass the invoice on to accounts@acme.test"
+    r"\b(?:get|pass|hand|give)\b(?:\s+\S+){0,5}?\s+(?:over |on |along )?to\s+[\w.+-]+@[\w-]+\.", re.I)
 # "share X with Y" leaves the user; "please share the names" (no one to share with) is an answer in chat.
 _SHARE_RE = re.compile(_LEAD + _FILLER + r"\s*share\b(?:\s+\S+){0,12}?\s+(?:with|to)\b|\bshare\b[^.\n]{0,80}?[\w.+-]+@[\w-]+\.", re.I)
 _PASSIVE_PAY_RE = re.compile(r"\b(?:should|must|to|will|please|needs? to|has to|have to)\s+(?:be|get)\s+(?:paid|transferred|refunded|reimbursed)\b", re.I)

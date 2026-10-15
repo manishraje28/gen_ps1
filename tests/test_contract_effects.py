@@ -262,3 +262,71 @@ def test_named_booking_target_must_be_user_literal():
     # Asking the agent to choose keeps the target open to evidence from the data.
     c2 = compile_contract("Book the best-rated hotel near 'Gare du Nord' for May 1-5.", ["reserve_hotel"], use_llm=False)
     assert SlotKind.LOOKUP in c2.kinds_for(Sink.TARGET)
+
+
+# ---------------- held-out phrasing (everyday wording, not AgentDojo prompts) ----------------
+HELD_OUT_COMMANDS = [
+    ("Could you shoot Priya an email with the agenda?", Effect.EGRESS),
+    ("Drop Bob a line about the delay.", Effect.EGRESS),
+    ("Ping Alice on Slack about the release.", Effect.EGRESS),
+    ("Loop in legal@acme.test on this thread.", Effect.EGRESS),
+    ("Get the Q3 report over to priya@acme.test.", Effect.EGRESS),
+    ("I'd like you to send the minutes to the team.", Effect.EGRESS),
+    ("Send out the newsletter to all subscribers.", Effect.EGRESS),
+    ("Kindly pass the invoice on to accounts@acme.test.", Effect.EGRESS),
+    ("Reply all with the updated deck.", Effect.EGRESS),
+    ("Wire 500 EUR to my landlord.", Effect.PAY),
+    ("Settle the invoice from Acme Supplies.", Effect.PAY),
+    ("Cover the electricity bill for October.", Effect.PAY),
+    ("Make a payment of 200 to Bob.", Effect.PAY),
+    ("Go ahead and pay Spotify what I owe.", Effect.PAY),
+    ("Can you top up my phone with 20?", Effect.PAY),
+    ("Schedule a meeting with David on Friday.", Effect.WRITE),
+    ("Put a dentist appointment in my calendar for Monday.", Effect.WRITE),
+    ("Create a file called notes.txt with the summary.", Effect.WRITE),
+    ("Rename the file to final.docx.", Effect.WRITE),
+    ("Get rid of the old drafts.", Effect.DELETE),
+    ("Clear out the spam folder.", Effect.DELETE),
+    ("Remove Bob from the general channel.", Effect.DELETE),
+    ("Book me a table at Le Petit Bistro for 8pm.", Effect.BOOK),
+    ("Grab me a room at the Hilton for the 3rd to the 5th.", Effect.BOOK),
+    ("Rent me an SUV from SunSet Rent-A-Car for 3 days.", Effect.BOOK),
+    ("Change my password to Blue42!", Effect.ACCOUNT),
+    ("My new address is 12 Elm St, please update it.", Effect.ACCOUNT),
+    ("Update my phone number to 555-0101.", Effect.ACCOUNT),
+    ("Hey, can you email the summary to Priya?", Effect.EGRESS),
+    ("Please make sure to pay the rent by Friday.", Effect.PAY),
+    ("When you're done, forward it to Bob.", Effect.EGRESS),
+]
+HELD_OUT_READ_ONLY = [
+    "Did Priya email me back?",
+    "How many emails did I send last week?",
+    "Who did I pay last month?",
+    "Has the invoice been paid?",
+    "What's the status of my booking at the Hilton?",
+    "Show me the messages in #general.",
+    "What does the reply from Bob say?",
+    "Is my password expiring soon?",
+    "When was the file deleted?",
+    "Summarise the newsletter I got from Acme.",
+    "What did David post in the channel?",
+    "Which payments are scheduled for next month?",
+    "Can you check whether the transfer went through?",
+    "What's the cancellation policy of the hotel?",
+    "Read me the shared document about the offsite.",
+    "How much would it cost to book the Hilton for 3 nights?",
+    "Is there a refund in my transaction history?",
+    "What's my new address on file?",
+    "Find the email where Bob asked me to pay him.",
+    "Tell me what Alice wants me to send her.",
+]
+
+
+@pytest.mark.parametrize("q,expected", HELD_OUT_COMMANDS)
+def test_held_out_commands_granted(q, expected):
+    assert expected in eff(q), f"{q!r} got {sorted(e.value for e in eff(q))}"
+
+
+@pytest.mark.parametrize("q", HELD_OUT_READ_ONLY)
+def test_held_out_questions_grant_nothing(q):
+    assert eff(q) == set(), f"{q!r} granted {sorted(e.value for e in eff(q))}"
