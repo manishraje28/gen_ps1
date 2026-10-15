@@ -400,6 +400,10 @@ def compile_contract(
             internal_domains=sorted(set((internal_domains or []) + deleg_domains)),
         ),
         compiled_by=compiled_by,
+        # "Pay the bill in bill-dec.txt": the user vouched for exactly one named document, so a payee
+        # taken from it is what they asked for and needs no second confirmation. Lane B's records check
+        # still stops a known payee whose IBAN differs, and DIRECTIVE spans in that file stay tainted.
+        confirm_new_payees=not (Effect.PAY in effects and not delegated and len(set(FILE_RE.findall(query))) == 1),
     )
     policy = org_policy if org_policy is not None else load_org_policy()
     if policy is not None:
@@ -426,8 +430,8 @@ class OrgPolicy(BaseModel):
     max_deletes: int | None = None
     require_user_literal: list[Sink] = Field(default_factory=list)  # e.g. [iban, secret]
     allow_delegation: bool = True
-    confirm_new_payees: bool = True
-    confirm_new_recipients: bool = True
+    confirm_new_payees: bool = False  # True forces the confirmation on; a policy can never switch it off
+    confirm_new_recipients: bool = False
 
 
 def _cap(current: float | int | None, cap: float | int | None):

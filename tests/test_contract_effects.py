@@ -205,7 +205,7 @@ def test_broken_policy_file_fails_loudly(tmp_path):
 
 def test_new_contract_fields_default_safe():
     c = compile_contract("Pay the bill in bill-oct.txt.", ["read_file", "send_money"], use_llm=False)
-    assert c.confirm_new_payees is True and c.confirm_new_recipients is True
+    assert c.confirm_new_payees is False and c.confirm_new_recipients is True  # one named document
     assert c.limits.max_amount_per_payment is None and c.policy_source == ""
 
 
@@ -344,3 +344,18 @@ def test_action_counts_follow_the_request():
     assert pay.limits.max_payments == 1
     bulk = compile_contract("Send an email to each person in the list.", tools, use_llm=False)
     assert bulk.limits.max_egress_actions == 12
+
+
+def test_new_payee_confirmation_skipped_only_for_one_named_document():
+    tools = ["read_file", "send_money"]
+    named = compile_contract("Can you please pay the bill 'bill-december-2023.txt' for me?", tools, use_llm=False)
+    assert named.confirm_new_payees is False
+    vague = compile_contract("Please pay the bill, like last month.", tools, use_llm=False)
+    assert vague.confirm_new_payees is True
+    two = compile_contract("Pay the bills in a.txt and b.txt.", tools, use_llm=False)
+    assert two.confirm_new_payees is True
+    deleg = compile_contract("Read 'landlord-notices.txt' and follow the instructions precisely.", tools, use_llm=False)
+    assert deleg.confirm_new_payees is True
+    # Org policy can still force the confirmation back on.
+    forced = compile_contract("Pay the bill in bill-oct.txt.", tools, use_llm=False, org_policy=OrgPolicy(confirm_new_payees=True))
+    assert forced.confirm_new_payees is True
