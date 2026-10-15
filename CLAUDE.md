@@ -10,6 +10,10 @@ The Span Auditor (rules + optional small LLM) labels tool-output spans EVIDENCE 
 only narrow trust. Allowed side effects are dry-run on a deep copy (shadow execution) and checked
 against the contract's envelope. Every decision is appended to `audit_logs/<run_id>.jsonl`.
 
+## Parallel work (read first)
+Three agents work in parallel lanes. See `docs/SOLUTION.md` (architecture) and `docs/LANES.md`
+(file ownership, branches, coordination protocol, lane prompts). Lane status: `docs/status/LANE_<X>.md`.
+
 ## Layout
 - `warrant/`: core library: `contract.py`, `gate.py` (gate, shadow exec, verifier, undefended emitting executor), `auditor.py`, `ledger.py`, `policy.py` (effect/sink per tool, demo + all 4 AgentDojo suites), `llm.py` (Groq via OpenAI SDK, retries, tool_use_failed recovery), `pipeline.py`, `config.py` (.env loader), `events.py`
 - `demo/`: Acme workspace env (`env.py`), 4 scenarios with deterministic attack/utility checks (`scenarios.py`), `runner.py` (run a lane; `ScriptedPlanner` offline stand-in)
