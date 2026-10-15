@@ -166,7 +166,8 @@ Read README.md, CLAUDE.md, docs/SOLUTION.md and docs/LANES.md fully before writi
 
 You are Lane C. Branch: lane-c/proof (from main). You own ONLY bench/, results/, web/, demo/,
 traces/, README.md, CLAUDE.md and docs/status/LANE_C.md. warrant/ is read-only for you.
-Follow the coordination protocol in docs/LANES.md section 3, and read the Lane A and Lane B status
+Follow the coordination protocol in docs/LANES.md section 3: commit AND push after every
+change (code, test or status update), so the other lanes always see your latest work. Read the Lane A and Lane B status
 files before each task.
 
 Tasks, in order:
