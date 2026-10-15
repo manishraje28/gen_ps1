@@ -55,7 +55,10 @@ Planned new fields (Lane A):
 1. **Start:** `git fetch origin`, then branch from `main` (`git checkout -b lane-x/...`).
 2. **Commit small:** one fix plus its test per commit. Message format:
    `lane-a: restrict EGRESS to explicit send intent`.
-3. **Push often**, at least after every fix, so the other lanes can see your work.
+3. **Commit and push after every change, immediately.** Every working change (code, test, status
+   update or finding) is committed and pushed to your lane branch as soon as it exists. Don't batch
+   work locally: the other lanes and the team build on your pushed branch, so anything not pushed
+   is invisible to them. Update your status file in the same push, or right after it.
 4. **Status file:** after each push, update `docs/status/LANE_<X>.md` using the template below.
 5. **Read the others:** before starting a new task, check the other lanes' status:
    `git fetch origin && git show origin/lane-b/gate:docs/status/LANE_B.md`
@@ -106,7 +109,8 @@ Read README.md, CLAUDE.md, docs/SOLUTION.md and docs/LANES.md fully before writi
 
 You are Lane A. Branch: lane-a/contract (from main). You own ONLY warrant/contract.py,
 warrant/policy.py, new tests/test_contract_*.py files and docs/status/LANE_A.md.
-Follow the coordination protocol in docs/LANES.md section 3.
+Follow the coordination protocol in docs/LANES.md section 3: commit AND push after every
+change (code, test or status update), so the other lanes always see your latest work.
 
 Your layer decides what a user's request is allowed to cause. Tasks, in order:
 1. Over-broad effects: EGRESS is granted for any request that mentions "email", "tell" or "send", and
@@ -132,7 +136,8 @@ Read README.md, CLAUDE.md, docs/SOLUTION.md and docs/LANES.md fully before writi
 
 You are Lane B. Branch: lane-b/gate (from main). You own ONLY warrant/gate.py, warrant/ledger.py,
 warrant/auditor.py, new tests/test_gate_*.py files and docs/status/LANE_B.md.
-Follow the coordination protocol in docs/LANES.md section 3. Check Lane A's status
+Follow the coordination protocol in docs/LANES.md section 3: commit AND push after every
+change (code, test or status update), so the other lanes always see your latest work. Check Lane A's status
 (git show origin/lane-a/contract:docs/status/LANE_A.md) for new contract fields, and read them with
 getattr(..., default) so you never depend on A being merged.
 
