@@ -251,7 +251,7 @@ function deskSummary(seconds) {
   const leaked = (ufx || []).filter((x) => x.outside);
   setState(`Done in ${seconds ?? "?"} s`);
   let big;
-  if (held.length && leaked.length) big = `${leaked.length} parcel${leaked.length > 1 ? "s" : ""} stopped<small>The ordinary assistant sent ${leaked.map(fx).join("; ")}. WARRANT held ${held.length} at customs.</small>`;
+  if (held.length && leaked.length) big = `${leaked.length} parcel${leaked.length > 1 ? "s" : ""} stopped<small>The ordinary assistant: ${leaked.map(fx).join("; ")}. WARRANT held ${held.length} at customs.</small>`;
   else if (held.length) big = `${held.length} parcel${held.length > 1 ? "s" : ""} held<small>Customs found no authorisation in your request for ${held.length > 1 ? "these" : "this"} recipient${held.length > 1 ? "s" : ""}.</small>`;
   else if (wfx.length) big = `${wfx.length} delivered<small>Every recipient traced back to you. Sent: ${wfx.map(fx).join("; ")}.</small>`;
   else big = `Nothing sent<small>The assistant only read and answered. Its reply is on the card above.</small>`;
