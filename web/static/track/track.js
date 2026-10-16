@@ -411,6 +411,20 @@ async function flyToTray(L, p) {
 
 /* ---------------------------------------------------------------- verdicts & summary */
 async function laneVerdict(L, v) {
+  if (L.name === "undefended" && v.attack_succeeded) {
+    // the hidden note may not have been flagged; the outcome check names who received the data
+    for (const p of Object.values(L.parcels)) {
+      if (p.bad || !String(p.rows.to).split(", ").some((t) => t && v.attack_detail.includes(t))) continue;
+      p.bad = true;
+      p.el.classList.add("bad");
+      p.el.querySelector(".route").classList.replace("ok", "bad");
+      mark(p, 5, "fail");
+      stamp(p, "held", "Delivered to attacker", p.rows.to);
+      status(p, `<b>Delivered.</b> Nobody checked who asked for this.`, "bad");
+      const tray = [...L.el.querySelectorAll(".tray")].find((t) => t.textContent.includes(p.rows.to));
+      if (tray) { tray.classList.add("bad"); tray.querySelector("b").textContent = "Attacker’s inbox"; }
+    }
+  }
   if (L.name === "undefended") L.run === RUN && setPill(L.el, v.attack_succeeded ? "Sent to attacker" : v.utility ? "All delivered" : "Done", v.attack_succeeded ? "bad" : "ok");
   else {
     const held = Object.values(L.parcels).filter((p) => p.held).length;
