@@ -44,6 +44,7 @@ from agentdojo.task_suite.load_suites import get_suite  # noqa: E402
 from agentdojo.task_suite.task_suite import functions_stack_trace_from_messages, model_output_from_messages  # noqa: E402
 from agentdojo.types import ChatAssistantMessage, text_content_block_from_string  # noqa: E402
 
+from bench import autodojo_cache  # noqa: E402,F401  registers attack "autodojo" (cached AutoDojo injections)
 from warrant import config  # noqa: E402
 from warrant.auditor import audit_output, mask_text  # noqa: E402
 from warrant.contract import ContractCompiler  # noqa: E402
