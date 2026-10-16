@@ -33,6 +33,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from integrations import gmail
 from demo.env import TODAY, USER_EMAIL, AcmeEnv, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
 from demo.runner import INTERNAL_DOMAINS
 from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
@@ -98,7 +99,7 @@ class Session:
         world = full_world()
         # Two independently built worlds, not a deepcopy: a deep copy of the Slack link is a dry run
         # (that is how the gate previews a send), so the undefended agent's messages would never be sent.
-        self.lanes = {"warrant": Lane(world), "undefended": Lane(full_world())}
+        self.lanes = {"warrant": Lane(gmail.attach(world)), "undefended": Lane(gmail.attach(full_world()))}
         self.turns = 0
 
 
@@ -320,7 +321,7 @@ def run_turn_lane(sess: Session, lane_name: str, query: str, mask: bool, sink) -
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # InitQuery warns when it is not the first message (multi-turn)
-            _, _, env, messages, extra = pipe.query(query, make_runtime(PLAYGROUND_TOOLS), lane.env, trim_history(lane.messages))
+            _, _, env, messages, extra = pipe.query(query, make_runtime(gmail.tools(PLAYGROUND_TOOLS)), lane.env, trim_history(lane.messages))
         lane.env, lane.messages = env, list(messages)
         state = extra.get("warrant")
         if state is not None:
