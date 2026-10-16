@@ -36,6 +36,11 @@ def index():
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/track")
+def track():
+    return FileResponse(STATIC / "track" / "index.html")
+
+
 @app.get("/api/config")
 def get_config():
     return {
