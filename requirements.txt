@@ -6,3 +6,4 @@ pydantic>=2.6
 PyYAML>=6.0
 pytest>=8.0
 pypdf>=4.0
+slack_sdk>=3.27

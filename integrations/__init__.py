@@ -1,1 +1,1 @@
-"""Real-service integrations (test/sandbox modes only) for the live WARRANT demo."""
+"""Real-service integrations for the live WARRANT demo (Gmail, Slack, payments; test/sandbox modes only). Each falls back to a simulation."""
