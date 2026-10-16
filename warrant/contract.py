@@ -42,6 +42,7 @@ DEFAULT_KINDS: dict[Sink, list[SlotKind]] = {
     Sink.SECRET: [SlotKind.USER_LITERAL],
     Sink.PROFILE: [SlotKind.USER_LITERAL, SlotKind.LOOKUP, SlotKind.DELEGATED],
     Sink.TARGET: ALL_KINDS,
+    Sink.RECORD: [SlotKind.USER_LITERAL, SlotKind.TRUSTED],
 }
 
 
@@ -68,10 +69,10 @@ class IntentContract(BaseModel):
     delegated_sources: list[str] = Field(default_factory=list)
     slots: list[Slot] = Field(default_factory=list)
     limits: Limits = Field(default_factory=Limits)
-    # Lane B enforces these in the gate: a payee IBAN or an external recipient that is neither
-    # typed by the user (USER_LITERAL) nor in the user's records (TRUSTED) needs the user's
-    # confirmation (NEEDS_INPUT: NEW_PAYEE / NEW_RECIPIENT), even when the data backs it (LOOKUP).
-    confirm_new_payees: bool = True
+    # True forces a confirmation (NEEDS_INPUT: NEW_PAYEE) for every payee IBAN that is neither typed by the
+    # user nor in their records, even one with a witness. Off by default: the gate's Two-Witness rule
+    # already asks the user about a new payee no independent principal vouches for (Lane E).
+    confirm_new_payees: bool = False
     # Off by default: users routinely send to addresses found in data they pointed at ("her e-mail is on
     # her website"). Injected addresses are already TAINTED and Lane B blocks a known contact whose
     # address differs from the records. Organisations that want a confirmation turn it on via OrgPolicy.
@@ -125,18 +126,27 @@ def extract_literals(text: str) -> list[str]:
 # position: at the start of a clause, after "please / and / then / can you ...", or after
 # "want to / need to / remember to ...". Nouns and questions about data grant READ only.
 _EFFECT_VERBS: dict[Effect, list[str]] = {
-    Effect.PAY: ["pay", "transfer", "refund", "reimburse", "wire", "send money", "settle", "top up",
+    Effect.PAY: ["pay", r"transfer(?!\s+(?:the\s+|my\s+|this\s+|that\s+)?(?:\S+\s+){0,2}?(?:repo|repository|repositories|ownership|project)s?\b)",
+                 "refund", "reimburse", "wire", "send money", "settle", "top up",
+                 "buy", "rebuy", "purchase", "order", "place (?:the|an?|my) order", "checkout",
+                 r"(?:request|get|ask for|claim) (?:me )?an? refund",
                  r"make (?:a|the|an?\s+\w+) payment", r"cover(?=(?:\s+\S+){0,3}?\s+(?:bill|invoice|rent|fee|cost|payment)s?\b)"],
     Effect.EGRESS: ["send", "email", "e-mail", "mail", "forward", "post", "message", "dm", "reply", "respond",
                     "tell", "notify", "inform", "publish", "text", "cc", "write back", "let \\w+ know",
-                    "shoot", "ping", "loop in", r"drop (?:\w+ )?an? (?:line|note|message|email)"],
+                    "shoot", "ping", "loop in", r"drop (?:\w+ )?an? (?:line|note|message|email)",
+                    r"transfer(?=\s+(?:the\s+|my\s+|this\s+|that\s+)?(?:\S+\s+){0,2}?(?:repo|repository|repositories|ownership|project)s?\b)",
+                    r"(?:open|file|raise|create|submit) an? (?:new )?issue"],
+    # Submitting data to a web form: log in, register, sign up, fill in, submit.
+    Effect.FORM: ["submit", r"fill (?:in|out)", "register", "sign (?:up|in)", "log ?in", "subscribe", "enroll", "apply"],
     # "book 5 hours for it" blocks calendar time (WRITE), it is not a reservation.
     Effect.BOOK: [r"book(?!\s+(?:\d+|an?|one|two|three|four|five|six)\s+(?:hours?|minutes?|mins?|days?)\b)", "reserve",
                   "make (?:a|an|me a) (?:reservation|booking)",
                   r"(?:grab|get|find|snag|secure) (?:me|us) an? (?:\w+ )?(?:room|table|car|seat|suite|spot|rental)", r"rent (?:me|us)"],
-    Effect.WRITE: ["create", "schedule", "add", "update", r"book(?=\s+(?:\d+|an?|one|two|three|four|five|six)\s+(?:hours?|minutes?|mins?|days?)\b)", "append", "set up", "set a", "rename", "move",
+    Effect.WRITE: ["create", "schedule", "add", "update", "setup", r"book(?=\s+(?:\d+|an?|one|two|three|four|five|six)\s+(?:hours?|minutes?|mins?|days?)\b)", "append", "set up", "set a", "rename", "move",
                    "invite", "reschedule", "write", "edit", "organi[sz]e", "put", "join", "change", "modify",
-                   "make (?:a|an|the|me a) (?:appointment|event|note|file|new|list|copy|calendar)"],
+                   "make (?:a|an|the|me a) (?:appointment|event|note|file|new|list|copy|calendar)",
+                   "clone", "push", "pull", "star", "unstar", "fork", "commit", "save", "copy", "upload",
+                   r"remove (?:\S+\s+){0,2}?stars?"],
     Effect.DELETE: ["delete", "remove", "cancel", "clean up", "erase", "kick", "trash", "discard", "purge",
                     "get rid of", "clear out", "empty", "wipe"],
     Effect.ACCOUNT: [],  # phrase rule only, see _ACCOUNT_RE
@@ -145,7 +155,13 @@ _LEAD = (
     r"(?:^|[.!?;:\n(\"'“‘,]|\b\d+[.)]|"
     r"\b(?:please|pls|and|then|also|kindly|just|or|now|first|next|finally|afterwards|after that|lastly|you|"
     r"(?:want|need|like|have|going|able|asked|remember|forget|sure|try|wish|plan|ready|you) to|"
-    r"(?:task|job|goal) is to)\b)"
+    r"(?:task|job|goal) is to|help (?:me|us) to|"
+    # a relayed request at the start of a sentence: "Alice asked me to invite her", "Bob told me to ..."
+    # (not inside a question: "Find the email where Bob asked me to pay him")
+    r"(?:^|(?<=[.!?\n]\s))[A-Z][\w.]*(?:\s+[A-Z][\w.]*)?\s+(?:ask|asks|asked|told|tells|wants|wanted|needs)\s+me\s+to|"
+    # a purpose clause after a command: "use it to buy", "find his address in the CV to send him ..."
+    r"(?:use|using|find|check|download|look up|visit|read)\b"
+    r"(?:(?!\b(?:ask|asks|asked|told|tells|want|wants|wanted|how|whether|what|where|when|why|which|who|if|link|way)\b)[^.!?\n]){0,60}?\bto)\b)"
 )
 _FILLER = r"(?:\s+(?:please|also|then|just|kindly|now|quickly|immediately|go ahead and|actually|still|first|both))*"
 _EFFECT_RES: dict[Effect, re.Pattern] = {
@@ -167,7 +183,13 @@ _ACCOUNT_RE = re.compile(
     r"profile|personal (?:info|information|details)|(?:first |last )?name|street|city|phone number|e-?mail address)\b|"
     # "My new address is 12 Elm St, please update it."
     r"\bmy new (?:password|passcode|pin|address|phone number|e-?mail address|name)\b[^.?!\n]{0,80}?\b(?:update|change|set|use)\b|"
-    r"\b(?:update|change|set)\b[^.?!\n]{0,40}?\bto my new (?:password|address|phone number|e-?mail address|name)\b", re.I)
+    r"\b(?:update|change|set)\b[^.?!\n]{0,40}?\bto my new (?:password|address|phone number|e-?mail address|name)\b|"
+    # "add the new SSH key from my email", "remove the old ssh key"
+    r"\b(?:add|remove|delete|revoke|rotate|replace)\b(?:\s+\S+){0,4}?\s+(?:ssh|deploy|gpg|access)\s+keys?\b", re.I)
+# The user sends the agent to a website ("visit www.x.com and pay the bill"): working on that page may
+# need its forms (log in, pay, register). FORM is granted only together with another commanded effect;
+# where the form posts is still checked as a URL sink (attacker URLs stay TAINTED).
+_SITE_RE = re.compile(r"(?:https?://|www\.)[\w.-]+|\b(?:visit|go to|open|on|via|through)\s+(?:the\s+)?(?:\w+\s+)?(?:website|site|portal|page|webpage)\b|\b(?:a|the) (?:\w+ )?link\b", re.I)
 # Passive or noun-phrase egress the verb rule cannot see: "a summary to X", "should be emailed to X".
 _EGRESS_EXTRA_RE = re.compile(
     r"\b(?:summary|report|copy|message|note|e-?mail|invitation)\s+to\s+(?:[\w.+-]+@[\w-]+|my |our |the |his |her |their |[A-Z][a-z]+)|"
@@ -181,7 +203,12 @@ _PASSIVE_PAY_RE = re.compile(r"\b(?:should|must|to|will|please|needs? to|has to|
 
 _DELEGATION_RE = re.compile(
     r"(follow (the |all |his |her |their )?(instructions?|steps|requests?)|do what\b|"
-    r"\b(do|complete|handle|perform|execute|carry out|take care of|action)\b[^.]{0,30}\b(tasks?|todos?|to-dos?|instructions?|requests?|actions?|action items)\b[^.]{0,15}\b(in|from|on|of|listed|specified|described|mentioned)\b(?! the order)|"
+    r"\b(do|complete|handle|perform|execute|carry out|take care of|action|finish)\b[^.]{0,30}\b(tasks?|todos?|to-dos?|instructions?|requests?|actions?|action items|homework|assignments?)\b[^.]{0,15}\b(in|from|on|of|listed|specified|described|mentioned|(?:he|she|they)\s+(?:request|ask)(?:s|ed)?)\b(?! the order)|"
+    r"\b(instructions?|steps|details)\s+(on|for|about)\b[^.]{0,60}\b(are|is)\s+(included|provided|given|listed|described|explained)\s+(in|on)\b|"
+    r"\b(address|resolve|fulfil+|complete|handle)\s+(his|her|their)\s+(issues?|requests?|tasks?|needs)\b|"
+    # "Alice sent me an email ... could you check it and fulfill her request / achieve it / complete them?"
+    r"\b(sent|emailed|messaged|forwarded|shared)\s+me\b.{0,160}?\b(complete|fulfil+|achieve|address|handle|take care of|do|resolve|finish)\s+"
+    r"(it|them|this|that|what\s+(he|she|they)\s+(needs?|wants?|asks?|asked)|(his|her|their)\s+(requests?|issues?|needs|tasks?|asks?))\b|"
     r"as (described|instructed|requested|listed|specified) in|"
     r"\b(act|proceed|do (it|this|that|everything)|respond|handle (it|this|that)) according to the (email|message|file|note|instructions))",
     re.I,
@@ -241,6 +268,20 @@ def heuristic_effects(query: str) -> set[Effect]:
         rest = _EGRESS_EXTRA_RE.sub(" ", q)
         if not _EFFECT_RES[Effect.WRITE].search(rest):
             effects.discard(Effect.WRITE)
+    # "add the SSH key" is an account change, not a generic WRITE.
+    if Effect.ACCOUNT in effects and Effect.WRITE in effects and not _EFFECT_RES[Effect.WRITE].search(_ACCOUNT_RE.sub(" ", q)):
+        effects.discard(Effect.WRITE)
+    # "transfer the one with the most stars to Alex" in a sentence about repositories hands over a repo.
+    for sentence in re.split(r"(?<=[.!?\n])\s+", q):
+        if re.search(r"\btransfer\b", sentence, re.I) and re.search(r"\brepo(?:sitor(?:y|ies))?s?\b", sentence, re.I) \
+                and not re.search(_MONEY, sentence.replace("repositor", ""), re.I):
+            effects.add(Effect.EGRESS)
+            if not any(_EFFECT_RES[Effect.PAY].search(x) for x in re.split(r"(?<=[.!?\n])\s+", q) if x is not sentence):
+                effects.discard(Effect.PAY)
+    # FORM is the mechanism, not the authority: a commanded payment or send, or work on a website the
+    # user named, may need a web form. Where the form posts is checked as a URL sink.
+    if effects and (_SITE_RE.search(q) or effects & {Effect.PAY, Effect.EGRESS}):
+        effects.add(Effect.FORM)
     return effects
 
 
@@ -362,7 +403,7 @@ def compile_contract(
     if delegated:
         # Delegation is powerful but bounded: new payees need confirmation, new external
         # recipients are refused, and DELETE / ACCOUNT still need the user's own words.
-        effects.update({Effect.WRITE, Effect.EGRESS, Effect.PAY})
+        effects.update({Effect.WRITE, Effect.EGRESS, Effect.PAY, Effect.FORM})
         for e in (Effect.DELETE, Effect.ACCOUNT):
             if e not in heuristic_effects(query):
                 effects.discard(e)
@@ -403,10 +444,10 @@ def compile_contract(
             internal_domains=sorted(set((internal_domains or []) + deleg_domains)),
         ),
         compiled_by=compiled_by,
-        # "Pay the bill in bill-dec.txt": the user vouched for exactly one named document, so a payee
-        # taken from it is what they asked for and needs no second confirmation. Lane B's records check
-        # still stops a known payee whose IBAN differs, and DIRECTIVE spans in that file stay tainted.
-        confirm_new_payees=not (Effect.PAY in effects and not delegated and len(set(FILE_RE.findall(query))) == 1),
+        # Lane E: a payee taken from a document is decided by the gate's Two-Witness rule (one independent
+        # principal must vouch for it), not by how many files the request names. Org policy can still
+        # force a confirmation for every new payee.
+        confirm_new_payees=False,
     )
     policy = org_policy if org_policy is not None else load_org_policy()
     if policy is not None:

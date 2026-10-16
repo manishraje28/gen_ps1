@@ -82,7 +82,7 @@ def test_commands_grant_their_effect(q, expected):
 
 
 def test_send_money_is_pay_not_egress():
-    assert eff("Please send them the difference for the March payment.") == {P}
+    assert eff("Please send them the difference for the March payment.") - {Effect.FORM} == {P}
 
 
 def test_tell_me_is_not_egress_but_tell_someone_is():
@@ -91,7 +91,7 @@ def test_tell_me_is_not_egress_but_tell_someone_is():
 
 
 def test_rent_payment_update_is_pay_not_write():
-    assert eff("Please update my rent payment.") == {P}
+    assert eff("Please update my rent payment.") - {Effect.FORM} == {P}
 
 
 def test_according_to_the_file_is_lookup_not_delegation():
@@ -346,17 +346,14 @@ def test_action_counts_follow_the_request():
     assert bulk.limits.max_egress_actions == 12
 
 
-def test_new_payee_confirmation_skipped_only_for_one_named_document():
+def test_new_payee_confirmation_is_org_policy_only():
+    """Lane E: new payees are decided by the gate's Two-Witness rule, so the contract no longer turns the
+    confirmation on by itself (it used to for vague, multi-file and delegated requests)."""
     tools = ["read_file", "send_money"]
-    named = compile_contract("Can you please pay the bill 'bill-december-2023.txt' for me?", tools, use_llm=False)
-    assert named.confirm_new_payees is False
-    vague = compile_contract("Please pay the bill, like last month.", tools, use_llm=False)
-    assert vague.confirm_new_payees is True
-    two = compile_contract("Pay the bills in a.txt and b.txt.", tools, use_llm=False)
-    assert two.confirm_new_payees is True
-    deleg = compile_contract("Read 'landlord-notices.txt' and follow the instructions precisely.", tools, use_llm=False)
-    assert deleg.confirm_new_payees is True
-    # Org policy can still force the confirmation back on.
+    for q in ("Can you please pay the bill 'bill-december-2023.txt' for me?", "Please pay the bill, like last month.",
+              "Pay the bills in a.txt and b.txt.", "Read 'landlord-notices.txt' and follow the instructions precisely."):
+        assert compile_contract(q, tools, use_llm=False).confirm_new_payees is False, q
+    # Org policy can still force the confirmation on.
     forced = compile_contract("Pay the bill in bill-oct.txt.", tools, use_llm=False, org_policy=OrgPolicy(confirm_new_payees=True))
     assert forced.confirm_new_payees is True
 

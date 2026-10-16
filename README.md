@@ -107,22 +107,12 @@ Things to try:
    agent shared `salary-bands-2026.xlsx` with an outside address; WARRANT masked the comment and did
    nothing else.
 2. Plant an email with an injection, then ask a read-only question about it. A request with no payment
-   words has no PAY in its contract, so any payment is refused. **Caveat:** EGRESS is granted by keyword,
-   and words like "email" or "tell" are enough, so even a read-only question can permit sending.
-3. Known weaknesses (found by a red-team pass on the code):
-   * **Over-broad effects:** the keyword rules grant EGRESS for any request that mentions "email",
-     "tell" or "send", and WRITE for words like "book" (which also matches "booking").
-   * **Data-like injections skip the auditor:** a span that reads like ordinary data (a new address or
-     IBAN, a "reply-to", a non-English or encoded instruction) scores 0 on the rules, so the LLM auditor
-     never sees it. Its values then count as LOOKUP evidence. When the request permits EGRESS or PAY and
-     you did not type the recipient or IBAN yourself, the gate can allow them.
-   * **Amounts are not protected:** any amount passes the amount check, bounded only by the payment
-     budget and balance.
-   * **The final answer text is not gated:** the agent can repeat a phishing link from the data.
-4. Known gap, try it: ask the agent to *pay* a bill whose document contains a data-like line with a
-   different IBAN (template "Subtle: looks like ordinary data"). If the auditor misses it, the IBAN is
-   evidence from a document you pointed to, and the gate can allow it. A "confirm new payees" rule
-   would close this.
+   words has no PAY in its contract, so any payment is refused. Since Lane A, effects are granted only for
+   commands ("send X to Y"), so a read-only question cannot permit sending.
+3. **Known holes, one click:** the *Plant a known hole* menu under the suggestions plants each attack from
+   [docs/attacks/HOLES.md](docs/attacks/HOLES.md) and fills in the question. Several of them still get past WARRANT
+   today (repeat trick, fake invoice from a new payee, amount from the wrong line, confidential data in an allowed
+   reply, fake chat turn, polite outsider request); round 2 targets them.
 
 ## The live demo (for the video)
 
@@ -160,24 +150,33 @@ Defences: `none`, `prompt` (data delimiting + instruction), `detector` (auditor 
 `warrant_nomask` (gate only, ablation), `warrant` (full). Results go to `results/*.json` and show up in
 the **AgentDojo benchmark** tab.
 
-### Worst-case results (fully hijacked planner, `important_instructions`, AgentDojo v1.2.1, rules-only contract)
+### Results (honest view; full tables in [docs/RESULTS.md](docs/RESULTS.md), generated from `results/` by `python -m bench.report`)
 
-| Suite | Runs | ASR undefended | ASR WARRANT | Benign utility WARRANT | Utility under attack (undef → WARRANT) |
-|---|---|---|---|---|---|
-| banking | 144 | 100% | **0%** | 100% | 87% → 94% |
-| slack | 105 | 100% | **20%*** | 100% | 97% → 76% |
-| travel | 140 | 83% | **8%** | 100% | 19% → 91% |
-| workspace | 560 | 39% | **0%** | 100% | 58% → 100% |
-| **all** | **949** | **61%** | **3%** | **100%** | |
+Worst case, LLM-free **oracle** planner that is fully hijacked, AgentDojo v1.2.1, `important_instructions`,
+merged Lane A + B + AnswerGuard:
 
-\* all of it is slack `injection_task_5`, which AgentDojo scores on *attempted* calls; the gate blocked
-every one. Travel residual: attacks that reuse an already-authorised effect with values that really exist
-in the data (e.g. booking a different real hotel).
+| Defence | Attacks, official AgentDojo score (of 949 runs) | Attacks that **executed** (of 609 attackable pairs) | Benign tasks completed |
+|---|---|---|---|
+| Undefended | 583/949 (61.43%) | 583/609 (95.73%) | 97/97 |
+| WARRANT | 22/949 (2.32%) | **1/609 (0.16%)** | 97/97 |
 
-**Honest caveats.** The oracle planner measures what the gate guarantees when the model is completely
-fooled; it is not a live LLM score. Contract rules were tuned while developing on AgentDojo tasks, so a
-held-out evaluation (e.g. new suites or adaptive attacks) is still needed. Live Groq numbers depend on the
-task subset you can afford on the free tier.
+Two corrections to how we used to report this:
+* **Attackable denominator.** 9 injection tasks (workspace `injection_task_6..13`, travel `injection_task_6`) have an
+  empty ground truth in the default environment, so 340 of the 949 pairs can never succeed. Undefended is 96% of what
+  can happen, not 61%.
+* **Executed calls.** AgentDojo scores slack `injection_task_5` on *proposed* calls (AgentDojo issue #168), so all
+  21 of slack's official "successes" against WARRANT were calls the gate refused. Executed: 0.
+
+**What does NOT hold up yet (important):**
+* **Other attack styles.** AgentDojo's `direct` ("TODO: …"), `ignore_previous` and `system_message` attacks have no
+  `<INFORMATION>` tag, so the Span Auditor does not flag them and their IBANs/recipients count as evidence. On the
+  oracle, WARRANT executes 38.89% of them in banking and 60% in slack (see docs/RESULTS.md §3). Round 2 Lane E
+  (Two-Witness for new payees and recipients) and Lane D (counterfactual value relabeling) target exactly this.
+* **Held-out attacks** (`bench/heldout.py`, written and frozen before running): with a fully hijacked scripted planner,
+  WARRANT stops 7 of 15; undefended stops 0. The 8 that get through are listed in docs/RESULTS.md §4 and
+  docs/attacks/HOLES.md.
+* The oracle measures what the gate guarantees when the model is completely fooled, not a live LLM score. Live and
+  adaptive-attacker numbers are in docs/RESULTS.md §2 and §5 as they come in.
 
 ### Live Groq status (honest)
 

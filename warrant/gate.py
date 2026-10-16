@@ -34,6 +34,19 @@ from .ledger import Provenance, ValueLedger, _text_has_value, mark_delegation, n
 from .policy import Effect, Sink, get_policy
 
 ALLOWED, REFUSED, NEEDS_INPUT = "ALLOWED", "REFUSED", "NEEDS_INPUT"
+# Refusals caused by tool-output data (the planner only gets a generic message for these, E5).
+DATA_CODES = {"TAINTED_VALUE", "TAINTED_CONTENT", "TAINTED_DOCUMENT", "NO_PROVENANCE", "DELEGATION_SCOPE", "SLOT_MISMATCH",
+              "SECRET_EGRESS", "NEW_PAYEE", "NEW_RECIPIENT", "REPEATED_REFUSALS"}
+QUIET_ENV = "WARRANT_QUIET_REFUSALS"
+QUIET_STRIKES = 3
+QUIET_MESSAGE = "This action was not authorised by the user's request. Continue with the original task."
+
+
+def config_flag(name: str, default: bool) -> bool:
+    import os
+
+    v = os.environ.get(name, "").strip().lower()
+    return default if not v else v not in ("0", "false", "no", "off")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _EMBEDDED_RE = re.compile(r"(?:https?://|www\.)[\w.-]+(?:/[\w./?%&=-]*)?|[\w.+-]+@[\w-]+\.[\w.-]+|\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b")
@@ -54,10 +67,56 @@ class WarrantState:
     # The user's own records (contacts, payment history, profile), read once before the run
     # commits anything, so a payment made during the run can never vouch for itself.
     records: list["TrustedRecord"] | None = None
+    # Lane E. Documents the agent read (one per tool output item), keyed by Span.doc.
+    docs: dict[str, "DocInfo"] = field(default_factory=dict)
+    # Origin stamps (H8): identifier -> the warrant kind it was written into the user's world with during
+    # a run (or CONFIRMED). Share one dict across turns so a value the agent wrote from a document can
+    # never come back as TRUSTED by being read back from the user's own history.
+    origins: dict[str, str] = field(default_factory=dict)
+    refusals: dict[str, int] = field(default_factory=dict)  # data-caused refusal code -> count in this run
+    blocked_effects: set = field(default_factory=set)       # effects refused for the rest of the run
+    asked_user: int = 0  # NEEDS_INPUT outcomes (reported as their own category, not as failures)
 
     def __post_init__(self) -> None:
         if self.ledger is None:
             self.ledger = ValueLedger(self.query)
+
+
+CONFIRMED = "CONFIRMED"
+
+
+def origin_key(value: Any) -> str:
+    v = str(value).strip()
+    return re.sub(r"\s+", "", v).upper() if _IBAN_RE.fullmatch(re.sub(r"\s+", "", v).upper()) else v.lower()
+
+
+def confirm_value(state: WarrantState, value: Any, by: str = "user", audit_dir=None, emit: Emitter = NULL_EMITTER) -> None:
+    """The user confirmed a new payee / recipient (answering a NEEDS_INPUT). The confirmation is
+    stamped on the value, so it counts as the user's own record from now on, and it is logged."""
+    state.origins[origin_key(value)] = CONFIRMED
+    append_audit(audit_dir or config.AUDIT_DIR, state, {"type": "confirmation", "value": str(value), "by": by}, emit)
+
+
+@dataclass
+class DocInfo:
+    """One document inside a tool output (a single email, file or list item)."""
+    key: str
+    tool: str
+    text: str
+    sender: str = ""      # email sender, if the document has one
+    name: str = ""        # file name / title, if any
+    secret: str = ""      # why it is confidential ("" = not)
+    labelled: set = field(default_factory=set)  # numbers written next to a due-amount label
+
+
+_ITEM_RE = re.compile(r"^- ", re.M)
+_SENDER_RE = re.compile(r"^\s*(?:-\s+)?(?:sender|from)\s*:\s*['\"]?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", re.I | re.M)
+_DOCNAME_RE = re.compile(r"^\s*(?:-\s+)?(?:filename|file_name|name|title|subject)\s*:\s*['\"]?([^\n'\"]{1,120})", re.I | re.M)
+# Confidential sources (H5, H6): a flagged file, HR / payroll / salary files, passwords and security codes.
+_SECRET_NAME_RE = re.compile(r"payroll|salar(?:y|ies)|/hr\b|\bhr/|password|passcode|credential|secret", re.I)
+_SECRET_TEXT_RE = re.compile(r"confidential\s*:\s*true|\bconfidential\b|\b(?:password|passcode|security code|verification code|one[- ]time (?:code|password)|otp)\b", re.I)
+_SECRET_WORDS = ("payroll", "salary", "salaries", "password", "passcode", "security code", "verification code", "confidential")
+
 
 
 def _values(v: Any) -> list[Any]:
@@ -200,6 +259,66 @@ def derive_amount(target: float, nums: list[float]) -> str | None:
     return None
 
 
+# Labels that bind a document number to "what is owed" (H3). Anything else in a document (a late-fee
+# schedule, a surcharge, a reference number) is not an amount to pay unless the user names it.
+_DUE_LABEL_RE = re.compile(
+    r"\b(?:amount\s+(?:due|payable|owed)|total(?:\s+(?:due|payable|amount))?|grand\s+total|balance(?:\s+due)?|payable|"
+    r"outstanding|rent|amount|due|price|cost|fee|invoice\s+(?:total|amount))\b", re.I)
+_LABEL_LINE_RE = re.compile(r"\n\s*[A-Za-z][\w ()/.'-]{0,50}:")  # "Late payment schedule:" starts a new field
+# The user asked for arithmetic (DERIVED is allowed only then, H4).
+_COMPUTE_RE = re.compile(
+    r"%|\b(?:difference|total|sum|split|percent(?:age)?|plus|minus|add(?:ing)?|subtract|includ(?:e|ing)|inclusive|half|double|"
+    r"twice|remaining|rest|increase[sd]?|decrease[sd]?|less|deduct|combined|together|each|per|times|multipl\w*|divid\w*|"
+    r"extra|additional|adjust\w*|accordingly|vat|tax|tip|interest|discount|share)\b", re.I)
+
+
+def _context_words(query: str) -> set[str]:
+    return {w.lower() for w in _WORD_RE.findall(query)} - _NAME_STOP - {"bill", "pay", "please", "using", "from"}
+
+
+def labelled_numbers(text: str, query: str = "") -> set[float]:
+    """Numbers in a document that sit next to a due-amount label (in the same field or sentence),
+    or next to a word the user used in their request."""
+    user_words = _context_words(query)
+    out: set[float] = set()
+    for m in _NUM_RE.finditer(text):
+        start = max(0, m.start() - 120)
+        before = text[start:m.start()]
+        cut = max([before.rfind(ch) for ch in ".!?"] + [x.start() for x in _LABEL_LINE_RE.finditer(before)] + [before.rfind("\n\n")])
+        ctx = before[cut + 1:] if cut >= 0 else before
+        ctx_words = {w.lower() for w in _WORD_RE.findall(ctx)}
+        if _DUE_LABEL_RE.search(ctx) or ctx_words & user_words:
+            f = _to_float(m.group(0))
+            if f is not None:
+                out.add(f)
+    return out
+
+
+def _split_docs(text: str) -> list[tuple[int, str]]:
+    """A YAML list output is one document per top-level item; anything else is one document."""
+    starts = [m.start() for m in _ITEM_RE.finditer(text)]
+    if len(starts) < 2 or starts[0] != 0:
+        return [(0, text)]
+    bounds = [*starts, len(text)]
+    return [(a, text[a:b]) for a, b in zip(bounds, bounds[1:])]
+
+
+# Values distinctive enough to identify confidential content: long numbers (not years), account
+# fragments such as XXXX4471, and codes mixing letters and digits.
+_SECRET_NUM_RE = re.compile(r"(?<![\w.])\d[\d,]{3,}(?:\.\d+)?(?![\w])")
+_SECRET_CODE_RE = re.compile(r"\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9][A-Za-z0-9-]{3,}\b")
+
+
+def secret_values(text: str) -> set[str]:
+    out = set()
+    for m in _SECRET_NUM_RE.findall(text):
+        digits = m.replace(",", "").split(".")[0]
+        if len(digits) >= 5 or (len(digits) == 4 and not re.fullmatch(r"(?:19|20)\d\d", digits)):
+            out.add(digits)
+    out |= {m.lower() for m in _SECRET_CODE_RE.findall(text) if not re.fullmatch(r"(?:19|20)\d\d|[a-z]+\d|q\d|fy\d+|l\d", m.lower())}
+    return out
+
+
 def _short(v: Any, n: int = 160) -> Any:
     s = json.dumps(v, default=str)
     return v if len(s) <= n else s[:n] + "…"
@@ -313,11 +432,113 @@ class WarrantGate(BasePipelineElement):
     def _audit(self, state: WarrantState, record: dict) -> None:
         append_audit(self.audit_dir, state, record, self.emit)
 
+    # ---------------- documents (Lane E) ----------------
+    @staticmethod
+    def label_read(state: WarrantState, tool: str, args: dict, text: str, spans: list) -> None:
+        """Splits a tool output into documents (one per list item) and records, per document, its
+        sender, its name, whether it is confidential and which numbers carry a due-amount label.
+        Each span is tagged with its document (Span.doc) and secrecy (Span.secret)."""
+        if not spans:
+            return
+        call = spans[0].call_id
+        arg_name = " ".join(str(v) for k, v in (args or {}).items() if isinstance(v, (str, int)) and k not in ("query",))
+        docs = []
+        for k, (start, body) in enumerate(_split_docs(text)):
+            sender = (_SENDER_RE.search(body) or [None, ""])[1].lower()
+            name = (_DOCNAME_RE.search(body) or [None, ""])[1].strip() or (arg_name if len(_split_docs(text)) == 1 else "")
+            secret = ""
+            hit = _SECRET_NAME_RE.search(name) or _SECRET_TEXT_RE.search(body)
+            if hit:
+                secret = hit.group(0)
+            info = DocInfo(key=f"{call}#{k}", tool=tool, text=body, sender=sender, name=name, secret=secret,
+                           labelled=labelled_numbers(body, state.query))
+            state.docs[info.key] = info
+            docs.append((start, info))
+        pos = 0
+        for sp in spans:
+            at = text.find(sp.text, pos)
+            if at < 0:
+                at = pos
+            else:
+                pos = at + len(sp.text)
+            info = [d for s, d in docs if s <= at][-1]
+            sp.doc, sp.secret = info.key, bool(info.secret)
+
+    @staticmethod
+    def _span(state: WarrantState, span_id: str | None):
+        return next((sp for sp in state.ledger.spans if sp.id == span_id), None) if span_id else None
+
+    @staticmethod
+    def _doc_tainted(state: WarrantState, doc: str) -> bool:
+        return bool(doc) and any(sp.doc == doc and sp.label == DIRECTIVE for sp in state.ledger.spans)
+
+    def _doc_of(self, state: WarrantState, p: Provenance) -> str:
+        sp = self._span(state, p.span_id)
+        return (sp.doc or sp.call_id) if sp is not None else ""
+
+    @staticmethod
+    def _stamped(state: WarrantState, value: Any) -> str:
+        """The origin stamp of a value written during a run ('' if none). LOOKUP / DELEGATED stamps
+        mean the user's own history cannot vouch for it."""
+        return state.origins.get(origin_key(value), "")
+
+    def _record_domains(self, state: WarrantState) -> set[str]:
+        return {_domain(e) for r in self._known_records(state) for e in r.emails
+                if self._stamped(state, e) not in (SlotKind.LOOKUP.value, SlotKind.DELEGATED.value)}
+
+    def _record_names(self, state: WarrantState) -> list[set[str]]:
+        """Names of the user's payees / contacts (from name fields of their records)."""
+        out = []
+        for r in self._known_records(state):
+            for m in re.finditer(r"(?:^|\n)\s*-?\s*(?:name|recipient_name|payee|first_name|last_name)\s*:\s*['\"]?([^\n'\"]+)", r.text, re.I):
+                toks = _name_tokens(m.group(1))
+                if toks:
+                    out.append(toks)
+        return out
+
+    def _witness(self, state: WarrantState, sink: Sink, value: Any, provs: list[Provenance]) -> str | None:
+        """Two-Witness (H2): one independent principal, other than the document that supplies the
+        value, must vouch for it. Counted by principal, not by document: repeats inside a document,
+        or several documents from the same unknown sender, are still no witness. Returns why the
+        value is witnessed, or None."""
+        domains = self._record_domains(state) | {d.lower() for d in state.contract.limits.internal_domains}
+        if sink == Sink.RECIPIENT:
+            dom = _domain(str(value))
+            return f"its domain {dom} is already in your records" if dom and dom in domains else None
+        if sink == Sink.URL:
+            host = re.sub(r"^(?:https?://)?(?:www\.)?", "", str(value).lower()).split("/")[0]
+            return f"{host} is already in your records" if host and any(host == d or host.endswith("." + d) for d in domains) else None
+        names = self._record_names(state)
+        for p in provs:
+            sp = self._span(state, p.span_id)
+            if sp is not None and sp.trusted_source:
+                continue  # the user's history holding a value the agent wrote there (origin stamp) is no witness
+            doc = state.docs.get(sp.doc) if sp is not None else None
+            text = doc.text if doc is not None else p.excerpt
+            toks = _name_tokens(text)
+            # (a) the payee's name or email domain is in the user's own records
+            for nm in names:
+                if nm <= toks:
+                    return f"the payee '{' '.join(sorted(nm))}' is in your records"
+            for e in _EMAIL_RE.findall(text):
+                if _domain(e) in domains and (doc is None or _domain(e) != _domain(doc.sender) or doc.sender == ""):
+                    return f"the payee's domain {_domain(e)} is in your records"
+            # (b) the document's sender is a known principal whose domain names the payee
+            if doc is not None and doc.sender and _domain(doc.sender) in domains:
+                label = _domain(doc.sender).split(".")[0]
+                if any(len(t) >= 4 and t in label for t in toks):
+                    return f"the document comes from {doc.sender}, a sender already in your records, and names the payee"
+        return None
+
     # ---------------- per-argument warrant check ----------------
     def _check_value(self, state: WarrantState, tool: str, arg: str, sink: Sink, value: Any) -> dict:
         c = state.contract
         allowed = c.kinds_for(sink)
         provs: list[Provenance] = state.ledger.provenance(value, c.delegated_sources)
+        if self._stamped(state, value) in (SlotKind.LOOKUP.value, SlotKind.DELEGATED.value):
+            # Origin stamp (H8): the agent itself wrote this value into the user's world from a document,
+            # so reading it back from their history is not a TRUSTED source.
+            provs = [Provenance(SlotKind.LOOKUP, p.label, p.span_id, p.tool, p.excerpt) if p.kind == SlotKind.TRUSTED else p for p in provs]
         good = [p for p in provs if p.kind is not None]
         tainted = [p for p in provs if p.label == DIRECTIVE]
         res = {"arg": arg, "sink": sink.value, "value": _short(value, 80), "allowed_kinds": [k.value for k in allowed], "provenance": [p.as_dict() for p in provs[:4]]}
@@ -337,6 +558,10 @@ class WarrantGate(BasePipelineElement):
             if match.kind == SlotKind.DELEGATED and sink == Sink.IBAN and not any(p.kind == SlotKind.TRUSTED for p in good):
                 return {**res, "verdict": NEEDS_INPUT, "code": "NEW_PAYEE",
                         "why": f"'{value}' is a new payee taken from delegated content; needs the user's confirmation"}
+            if sink in (Sink.IBAN, Sink.RECIPIENT, Sink.URL) and match.kind == SlotKind.LOOKUP:
+                held = self._taint_check(state, sink, value, good)
+                if held is not None:
+                    return {**res, **held}
             if sink in (Sink.IBAN, Sink.RECIPIENT) and match.kind in (SlotKind.LOOKUP, SlotKind.DELEGATED):
                 held = self._binding_check(state, sink, value, good)
                 if held is not None:
@@ -365,9 +590,13 @@ class WarrantGate(BasePipelineElement):
             if pol.effect != Effect.READ or not pol.trusted_source:
                 continue
             try:
-                if fn.parameters.model_json_schema().get("required"):
+                schema = fn.parameters.model_json_schema()
+                required = schema.get("required") or []
+                props = schema.get("properties", {})
+                # A search over the user's own records ("search_contacts(query)") with an empty query lists them all.
+                if any(props.get(r, {}).get("type") != "string" for r in required):
                     continue
-                result, err = runtime.run_function(env.model_copy(deep=True), name, {})
+                result, err = runtime.run_function(env.model_copy(deep=True), name, {r: "" for r in required})
                 if not err:
                     records += records_from_text(self.fmt(result), name)
             except Exception:  # a failed probe only means fewer records; nothing is allowed because of it
@@ -387,6 +616,42 @@ class WarrantGate(BasePipelineElement):
             recs += records_from_text("\n".join(sp.text for sp in spans), spans[0].tool)
         return recs
 
+    def _in_records(self, state: WarrantState, sink: Sink, value: Any) -> bool:
+        """The value is one of the user's own payees / contacts (or they confirmed it). A value the
+        agent wrote into their world from a document during a run does not count (origin stamp)."""
+        stamp = self._stamped(state, value)
+        if stamp == CONFIRMED:
+            return True
+        if stamp in (SlotKind.LOOKUP.value, SlotKind.DELEGATED.value):
+            return False
+        key = origin_key(value)
+        return key in {x for r in self._known_records(state) for x in (r.ibans if sink == Sink.IBAN else r.emails)}
+
+    def _taint_check(self, state: WarrantState, sink: Sink, value: Any, good: list[Provenance]) -> dict | None:
+        """Document taint (H1): if a document contains instruction-like text, none of its addresses,
+        IBANs or links is a LOOKUP warrant on its own: the attacker may have written the value
+        twice, once in the flagged instruction and once in a clean-looking line. The value is
+        still fine if a clean document also has it, if it is the user's own record, if it is the
+        poisoned document's own sender (a reply), or if an independent witness vouches for it."""
+        if any(p.kind in (SlotKind.USER_LITERAL, SlotKind.TRUSTED) for p in good):
+            return None
+        lookups = [p for p in good if p.kind == SlotKind.LOOKUP]
+        tainted = [p for p in lookups if self._doc_tainted(state, self._doc_of(state, p))]
+        if not tainted or len(tainted) < len(lookups):
+            return None
+        if self._in_records(state, sink, value):
+            return None
+        docs = [state.docs.get(self._doc_of(state, p)) for p in tainted]
+        if sink == Sink.RECIPIENT and any(d is not None and d.sender == str(value).strip().lower() for d in docs):
+            return None
+        if self._witness(state, sink, value, tainted) is not None:
+            return None
+        flagged = next((sp for sp in state.ledger.spans if sp.doc == self._doc_of(state, tainted[0]) and sp.label == DIRECTIVE), None)
+        return {"verdict": NEEDS_INPUT, "code": "TAINTED_DOCUMENT", "kind": "LOOKUP",
+                "why": f"'{value}' only comes from a document that also contains instruction-like text"
+                       f"{f' (span {flagged.id})' if flagged else ''}; it is not typed by you, not in your records and no "
+                       f"independent source vouches for it. Confirm with the user before using it"}
+
     def _binding_check(self, state: WarrantState, sink: Sink, value: Any, good: list[Provenance]) -> dict | None:
         """A value taken from documents (LOOKUP / DELEGATED) must not contradict the user's own
         records. If the document names a payee or contact the user already has but gives a
@@ -398,8 +663,8 @@ class WarrantGate(BasePipelineElement):
         key = re.sub(r"\s+", "", v).upper() if is_iban else v.lower()
         code = "NEW_PAYEE" if is_iban else "NEW_RECIPIENT"
         records = self._known_records(state)
-        if key in {x for r in records for x in (r.ibans if is_iban else r.emails)}:
-            return None  # already one of the user's own payees / contacts
+        if self._in_records(state, sink, value):
+            return None  # already one of the user's own payees / contacts (or confirmed by them)
         doc_tokens: set[str] = set()
         for p in good:
             if p.kind in (SlotKind.LOOKUP, SlotKind.DELEGATED):
@@ -407,13 +672,26 @@ class WarrantGate(BasePipelineElement):
         for r in records:
             theirs = r.ibans if is_iban else r.emails
             shared = sorted(doc_tokens & r.tokens)
-            if theirs and shared:
+            if theirs and shared and key not in theirs:
                 return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
                         "why": f"'{v}' comes from a document that names '{' '.join(shared[:3])}', but your own records ({r.source}) "
                                f"have {', '.join(sorted(theirs)[:2])} for them. Possible impersonation: confirm with the user before using the new one"}
         if is_iban and getattr(c, "confirm_new_payees", None) is True:
             return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
-                    "why": f"'{v}' is a new payee (not typed by the user, not in their records); the contract asks for confirmation"}
+                    "why": f"'{v}' is a new payee (not typed by the user, not in their records); the organisation policy asks for confirmation"}
+        if is_iban:
+            # Two-Witness (H2): a payee taken from a document needs one independent witness.
+            docs = [p for p in good if p.kind in (SlotKind.LOOKUP, SlotKind.DELEGATED)]
+            if self._witness(state, Sink.IBAN, value, docs) is None:
+                senders = sorted({d.sender for p in docs if (d := state.docs.get(self._doc_of(state, p)))
+                                  is not None and d.sender})
+                stamp = " It was paid earlier by the agent from a document, which does not make it a known payee." \
+                    if self._stamped(state, value) else ""
+                return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
+                        "why": f"'{v}' is a new payee: not typed by you and not in your records, and no independent witness vouches for it "
+                               f"(missing: the payee's name or domain in your contacts or payment history, or a known sender "
+                               f"{'(sender ' + ', '.join(senders) + ' is unknown)' if senders else '(the document has no sender)'}).{stamp} "
+                               f"Confirm with the user before paying"}
         if not is_iban and getattr(c, "confirm_new_recipients", None) is True:
             if _domain(v) not in [d.lower() for d in c.limits.internal_domains]:
                 return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
@@ -439,15 +717,27 @@ class WarrantGate(BasePipelineElement):
 
         add(SlotKind.USER_LITERAL, state.query, Provenance(SlotKind.USER_LITERAL, "USER", None, "user_request", state.query))
         tainted: list[Provenance] = []
+        unlabelled: list[Provenance] = []
         for sp in state.ledger.spans:
             if sp.label == DIRECTIVE:
                 if any(abs(n - x) <= tol for n in _numbers(sp.text)):
                     tainted.append(Provenance(None, DIRECTIVE, sp.id, sp.tool, sp.text))
                 continue
-            prov_kind = SlotKind.TRUSTED if sp.trusted_source else SlotKind.LOOKUP
-            add(prov_kind, sp.text, Provenance(prov_kind, "EVIDENCE", sp.id, sp.tool, sp.text))
-            if sp.delegated:
-                add(SlotKind.DELEGATED, sp.text, Provenance(SlotKind.DELEGATED, "EVIDENCE", sp.id, sp.tool, sp.text))
+            if sp.trusted_source:
+                add(SlotKind.TRUSTED, sp.text, Provenance(SlotKind.TRUSTED, "EVIDENCE", sp.id, sp.tool, sp.text))
+                continue
+            # A number from a document binds only if it sits next to a due-amount label or a word the
+            # user used (H3): "Amount due: 4,250" yes, "Late payment schedule: 42,500" no.
+            doc = state.docs.get(sp.doc)
+            labels = doc.labelled if doc is not None else labelled_numbers(sp.text, state.query)
+            nums = [n for n in _numbers(sp.text) if n in labels]
+            if any(abs(n - x) <= tol for n in _numbers(sp.text) if n not in labels):
+                unlabelled.append(Provenance(SlotKind.LOOKUP, "EVIDENCE", sp.id, sp.tool, sp.text))
+            kinds = [SlotKind.LOOKUP] + ([SlotKind.DELEGATED] if sp.delegated else [])
+            for kind in kinds:
+                prov = Provenance(kind, "EVIDENCE", sp.id, sp.tool, sp.text)
+                for n in nums:
+                    pools.setdefault(kind, []).append((n, prov))
         for kind in (SlotKind.USER_LITERAL, SlotKind.TRUSTED, SlotKind.LOOKUP, SlotKind.DELEGATED):
             if kind not in allowed:
                 continue
@@ -455,7 +745,10 @@ class WarrantGate(BasePipelineElement):
                 if abs(n - x) <= tol:
                     return {**res, "provenance": [prov.as_dict()], "verdict": ALLOWED, "kind": kind.value,
                             "why": f"warrant: {kind.value} ({prov.tool or 'user'})"}
-        if SlotKind.DERIVED in allowed:
+        # DERIVED only when the user asked for arithmetic, over the user's numbers, their records and
+        # labelled document numbers: "total payable is base plus surcharge" in a bill does not count (H4).
+        # A delegation ("follow the instructions in the notice") hands the arithmetic to the delegated source.
+        if SlotKind.DERIVED in allowed and (_COMPUTE_RE.search(state.query) or c.delegated_sources):
             known = [n for kind in (SlotKind.USER_LITERAL, SlotKind.TRUSTED, SlotKind.LOOKUP, SlotKind.DELEGATED)
                      if kind in allowed for n, _ in pools.get(kind, [])]
             # the user's own numbers first, so their arithmetic wins over coincidences in documents
@@ -466,8 +759,52 @@ class WarrantGate(BasePipelineElement):
         if tainted:
             return {**res, "provenance": [p.as_dict() for p in tainted[:2]], "verdict": REFUSED, "code": "TAINTED_VALUE",
                     "why": f"amount {x:g} only appears inside instruction-like text in untrusted data (span {tainted[0].span_id})"}
+        if unlabelled:
+            return {**res, "provenance": [p.as_dict() for p in unlabelled[:2]], "verdict": REFUSED, "code": "SLOT_MISMATCH",
+                    "why": f"amount {x:g} appears in a document but not as the amount due (no 'amount due' / 'total' / 'balance' "
+                           f"label next to it, and not named in your request) (span {unlabelled[0].span_id})"}
         return {**res, "provenance": [], "verdict": REFUSED, "code": "SLOT_MISMATCH",
                 "why": f"amount {x:g} is not in the user's request, their records or the data read, and is not computed from them"}
+
+    def _secret_check(self, state: WarrantState, call: FunctionCall, pol) -> list[dict]:
+        q = state.query.lower()
+        secrets: dict[str, list] = {}
+        for sp in state.ledger.spans:
+            if sp.secret:
+                secrets.setdefault(sp.doc or sp.call_id, []).append(sp)
+        if not secrets:
+            return []
+        public = norm(state.query) + " " + " ".join(norm(sp.text) for sp in state.ledger.spans if not sp.secret)
+        out = []
+        for doc_key, spans in secrets.items():
+            doc = state.docs.get(doc_key)
+            name = (doc.name if doc else "").strip().lower()
+            stem = re.sub(r"\.[a-z0-9]{2,5}$", "", name.split("/")[-1])
+            why_secret = (doc.secret if doc else "confidential").lower()
+            # the user named this confidential source (its file name, or the kind of secret) in the request
+            if (stem and len(stem) >= 4 and stem in q) or (why_secret and why_secret in q and why_secret != "confidential"):
+                continue
+            values = set()
+            texts = []
+            for sp in spans:
+                values |= secret_values(sp.text)
+                if len(norm(sp.text)) >= 16:
+                    texts.append(norm(sp.text))
+            values = {v for v in values if v not in public}
+            texts = [t for t in texts if t not in public]
+            for arg, v in call.args.items():
+                for s in _values(v):
+                    if not isinstance(s, str):
+                        continue
+                    ns = norm(s)
+                    hits = sorted(v2 for v2 in values if v2 in ns) + [t[:30] for t in texts if t in ns]
+                    if hits:
+                        out.append({"arg": arg, "sink": "content", "value": _short(s, 60), "allowed_kinds": [], "provenance": [],
+                                    "verdict": REFUSED, "code": "SECRET_EGRESS",
+                                    "why": f"{arg} carries confidential data ({', '.join(hits[:3])}) from "
+                                           f"{doc.name or doc.tool if doc else 'a confidential source'}, which your request did not name"})
+                        break
+        return out
 
     def _decide(self, state: WarrantState, call: FunctionCall) -> dict:
         pol = get_policy(call.function)
@@ -476,6 +813,9 @@ class WarrantGate(BasePipelineElement):
         if pol.effect != Effect.READ and pol.effect not in c.allowed_effects:
             return {**decision, "decision": REFUSED, "code": "EFFECT_OUT_OF_SCOPE",
                     "reason": f"{pol.effect.value} is not in the Intent Contract (allowed: {', '.join(e.value for e in c.allowed_effects)})"}
+        if pol.effect != Effect.READ and pol.effect.value in state.blocked_effects:
+            return {**decision, "decision": REFUSED, "code": "REPEATED_REFUSALS",
+                    "reason": f"{pol.effect.value} calls are blocked for the rest of this run after {QUIET_STRIKES} refusals of the same kind"}
         for arg, sink in pol.sinks.items():
             for v in _values(call.args.get(arg)):
                 if sink == Sink.AMOUNT:
@@ -494,6 +834,22 @@ class WarrantGate(BasePipelineElement):
                         decision["checks"].append({"arg": arg, "sink": "content", "value": tok, "allowed_kinds": [], "provenance": [p.as_dict() for p in provs[:2]],
                                                    "verdict": REFUSED, "code": "TAINTED_CONTENT",
                                                    "why": f"'{tok}' inside {arg} comes only from instruction-like text in untrusted data"})
+        # Secrecy (H5, H6): confidential values must not leave in free text (a body, a subject, a file
+        # name, a URL's query string) unless the user named that confidential source in the request.
+        if pol.effect != Effect.READ or any(s == Sink.URL for s in pol.sinks.values()):
+            decision["checks"] += self._secret_check(state, call, pol)
+        # --- perturbation hook (lane D) ---
+        import os as _os  # noqa: PLC0415
+        if _os.environ.get("WARRANT_PERTURB") == "1":
+            from .perturb import check as _perturb_check  # noqa: PLC0415
+
+            _probe = _perturb_check(state, call, decision, planner=getattr(state, "planner", None),
+                                    context=getattr(state, "perturb_ctx", None))
+            if _probe:
+                decision["checks"].append(_probe["check"])
+                self.emit("perturb", **_probe["event"])
+                append_audit(self.audit_dir, state, _probe["audit"], self.emit)
+        # --- end perturbation hook ---
         bad = [x for x in decision["checks"] if x["verdict"] != ALLOWED]
         if bad:
             worst = next((x for x in bad if x["verdict"] == REFUSED), bad[0])
@@ -601,11 +957,7 @@ class WarrantGate(BasePipelineElement):
 
             if decision["decision"] != ALLOWED:
                 self.emit("stage", stage="refuse", status="active")
-                verb = "needs the user's confirmation" if decision["decision"] == NEEDS_INPUT else "was blocked"
-                msg = (
-                    f"WARRANT_{decision['decision']} ({decision['code']}): this call {verb}. {decision['reason']}. "
-                    f"The action was NOT executed. Do not retry it. Continue with the user's original request only: \"{state.contract.task}\"."
-                )
+                msg = self._refusal_message(state, decision, pol.effect)
                 results.append(self._tool_msg(call, call_id, "", msg))
                 self.emit("tool_result", id=call_id, function=call.function, text=msg, refused=True, spans=[], masked=0)
                 self.emit("stage", stage="refuse", status="done")
@@ -616,6 +968,7 @@ class WarrantGate(BasePipelineElement):
             result, error = runtime.run_function(env, call.function, call.args)
             if not error:
                 self._commit_counters(state, pol.effect, call)
+                self._stamp(state, decision)
             text = self.fmt(result) if not error else ""
             self.emit("stage", stage="commit", status="done")
 
@@ -626,6 +979,7 @@ class WarrantGate(BasePipelineElement):
                 sp.trusted_source = pol.trusted_source
             if state.contract.delegated_sources:
                 mark_delegation(spans, f"{call.function} {json.dumps(dict(call.args), default=str)}\n{text}", state.contract.delegated_sources)
+            self.label_read(state, call.function, dict(call.args), text, spans)
             state.ledger.add(spans)
             shown, n_masked = (mask_text(text, spans) if self.mask else (text, 0))
             self.emit("tool_result", id=call_id, function=call.function, text=shown, raw=text if n_masked else None, spans=[s.as_dict() for s in spans], masked=n_masked, error=error)
@@ -634,6 +988,41 @@ class WarrantGate(BasePipelineElement):
             results.append(self._tool_msg(call, call_id, shown, error))
 
         return query, runtime, env, [*messages, *results], extra_args
+
+    def _refusal_message(self, state: WarrantState, decision: dict, effect: Effect) -> str:
+        """What the planner is told. Refusals caused by tool-output data get one generic sentence, so
+        an attacker probing the gate learns nothing from the refusal text (denial-feedback leakage);
+        user-recoverable ones keep their typed code. Full reasons stay in the audit log and the UI."""
+        code = decision["code"]
+        if decision["decision"] == NEEDS_INPUT:
+            state.asked_user += 1
+        if code in DATA_CODES:
+            state.refusals[code] = state.refusals.get(code, 0) + 1
+            if state.refusals[code] >= QUIET_STRIKES and effect != Effect.READ:
+                state.blocked_effects.add(effect.value)
+        if config_flag(QUIET_ENV, True) and code in DATA_CODES:
+            if decision["decision"] == NEEDS_INPUT:
+                return (f"WARRANT_NEEDS_INPUT: this action needs the user's confirmation and was NOT executed. Do not retry it. "
+                        f"Tell the user what you wanted to do and ask them to confirm. Continue with the original task: \"{state.contract.task}\".")
+            return f"WARRANT_REFUSED: {QUIET_MESSAGE} Original task: \"{state.contract.task}\"."
+        verb = "needs the user's confirmation" if decision["decision"] == NEEDS_INPUT else "was blocked"
+        return (f"WARRANT_{decision['decision']} ({code}): this call {verb}. {decision['reason']}. "
+                f"The action was NOT executed. Do not retry it. Continue with the user's original request only: \"{state.contract.task}\".")
+
+    @staticmethod
+    def _stamp(state: WarrantState, decision: dict) -> None:
+        """Origin stamps (H8): remember with which warrant each payee / recipient / link was written
+        into the user's world, so it cannot come back later as the user's own record."""
+        for chk in decision.get("checks", []):
+            if chk.get("sink") not in (Sink.IBAN.value, Sink.RECIPIENT.value, Sink.URL.value) or chk.get("verdict") != ALLOWED:
+                continue
+            key = origin_key(chk.get("value"))
+            if state.origins.get(key) == CONFIRMED:
+                continue
+            kind = chk.get("kind") or ""
+            weak = (SlotKind.LOOKUP.value, SlotKind.DELEGATED.value)
+            if kind in weak or state.origins.get(key) not in weak:
+                state.origins[key] = kind
 
     @staticmethod
     def _tool_msg(call: FunctionCall, call_id: str, text: str, error: str | None) -> ChatToolResultMessage:

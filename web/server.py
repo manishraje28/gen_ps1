@@ -165,6 +165,7 @@ def bench():
         if "defense" in d:
             d.pop("per_run", None)
             d.pop("benign_per_task", None)
+            d.pop("benign_detail", None)
             rows.append(d)
     return rows
 

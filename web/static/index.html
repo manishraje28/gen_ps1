@@ -19,6 +19,7 @@
     <button class="tab" data-page="play">Playground</button>
     <button class="tab" data-page="bench">AgentDojo benchmark</button>
     <button class="tab" data-page="how">How it works</button>
+    <button class="tab" id="stageBtn" type="button" title="Bigger text for presenting" onclick="toggleStage()">Stage mode</button>
   </nav>
   <div class="spacer"></div>
   <span class="chip-dark" id="modelChip"><span class="dot off"></span><span>loading…</span></span>
@@ -100,6 +101,7 @@
         </div>
         <div class="chatlog" id="chatLog"></div>
         <div class="suggest" id="pgSuggest"></div>
+        <select id="pgHoles" class="holes" title="Plant one of the known attacks from docs/attacks/HOLES.md"></select>
         <form class="composer" id="pgForm">
           <textarea id="pgInput" rows="2" placeholder="Ask the assistant anything, e.g. &quot;Summarise the support page at https://acmesupplies.test/support&quot;"></textarea>
           <button class="run" id="pgSend" type="submit"><span data-icon="arrow"></span>Send</button>

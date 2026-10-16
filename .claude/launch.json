@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "web.server", "--port", "8000"],
       "port": 8000
+    },
+    {
+      "name": "warrant-dev",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "web.server", "--port", "8001"],
+      "port": 8001
     }
   ]
 }
