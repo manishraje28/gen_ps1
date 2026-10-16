@@ -39,6 +39,7 @@ from demo.env import TODAY, USER_EMAIL, AcmeEnv, Email, File, PLAYGROUND_TOOLS, 
 from demo.runner import INTERNAL_DOMAINS
 from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
 from warrant import config
+from warrant.auditor import audit_output
 from warrant.contract import ContractCompiler
 from warrant.events import Emitter
 from warrant.gate import CONFIRMED, AnswerGuard, EmittingToolsExecutor, WarrantGate, confirm_value, origin_key
@@ -242,10 +243,22 @@ def side_effects(before: dict, env: AcmeEnv) -> list[dict]:
     return out
 
 
+def _suspicious(text: str) -> bool:
+    """Rules-only hint for the UI (does the text contain instruction-like lines aimed at an AI?). The gate's own
+    decisions never depend on this flag."""
+    try:
+        return any(sp.label == "DIRECTIVE" for sp in audit_output(text or "", "ui", "ui", "u", use_llm=False))
+    except Exception:
+        return False
+
+
 def workspace(env: AcmeEnv) -> dict:
     return {
-        "emails": [{"id": e.id, "title": e.subject, "sub": f"{e.sender} · {e.date}"} for e in sorted(env.inbox.received, key=lambda e: e.date, reverse=True)],
-        "files": [{"id": f.id, "title": f.name, "sub": f"{f.folder}{' · confidential' if f.confidential else ''}"} for f in env.drive.files],
+        "emails": [{"id": e.id, "title": e.subject, "sub": f"{e.sender} · {e.date}", "sender": e.sender, "date": e.date,
+                    "preview": " ".join((e.body or "").split())[:140], "suspicious": _suspicious(e.body)}
+                   for e in sorted(env.inbox.received, key=lambda e: e.date, reverse=True)],
+        "files": [{"id": f.id, "title": f.name, "sub": f"{f.folder}{' · confidential' if f.confidential else ''}", "folder": f.folder,
+                   "confidential": bool(f.confidential), "suspicious": _suspicious(f.content)} for f in env.drive.files],
         "web": [{"id": u, "title": u.split("//", 1)[-1], "sub": f"{len(c):,} chars"} for u, c in env.web.pages.items()],
         "contacts": [{"id": c.name, "title": c.name, "sub": " · ".join(x for x in (c.email, c.iban, c.note) if x)} for c in env.contacts],
         "bank": [{"id": str(t.id), "title": f"INR {t.amount:,.0f} → {t.recipient_name or t.recipient_iban}", "sub": f"{t.date} · {t.subject}"} for t in env.bank.history],
@@ -510,7 +523,7 @@ def chat(turn: ChatTurn):
         raise HTTPException(409, "the agent is still answering the previous message")
     lanes = ["warrant", "undefended"] if turn.compare else ["warrant"]
     q: queue.Queue = queue.Queue()
-    record = {"prompt": turn.message.strip(), "compare": turn.compare, "gullible": turn.gullible, "events": []}
+    record = {"prompt": turn.message.strip(), "compare": turn.compare, "gullible": turn.gullible, "events": [], "ts": time.time()}
     pending = {"n": len(lanes)}
     guard = threading.Lock()
 
