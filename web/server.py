@@ -28,6 +28,9 @@ from web.playground import router as playground_router  # noqa: E402
 STATIC = Path(__file__).resolve().parent / "static"
 app = FastAPI(title="WARRANT demo")
 app.include_router(playground_router)
+from web import auth  # noqa: E402
+app.include_router(auth.router)
+app.middleware("http")(auth.attach_user)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

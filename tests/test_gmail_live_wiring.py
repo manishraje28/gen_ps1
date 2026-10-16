@@ -34,13 +34,12 @@ def test_planting_an_email_is_refused_when_live(live):
     s = pg.Session()
     pg.SESSIONS[s.id] = s
     with pytest.raises(HTTPException) as e:
-        pg.add(pg.AddItem(sid=s.id, kind="email", sender="x@example.test", subject="hi", content="hello"))
+        pg.add(pg.AddItem(sid=s.id, kind="email", sender="x@example.test", subject="hi", content="hello"), user=pg.store.demo_user())
     assert e.value.status_code == 400
 
 
-def test_restored_session_keeps_undefended_lane_offline(live, tmp_path, monkeypatch):
-    monkeypatch.setattr(pg, "SESSIONS_DIR", tmp_path)
-    s = pg.Session()
+def test_restored_session_keeps_undefended_lane_offline(live):
+    s = pg.Session(pg.store.demo_user()["id"])
     pg.save_session(s)
     gmail._live_ids.clear()
     r = pg.load_session(s.id)

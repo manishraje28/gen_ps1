@@ -2,7 +2,7 @@
    Pages: Home, Inbox, Tasks, Task (Plan / Progress / Results), Apps, Drive, Slack, Bank, Contacts, Calendar,
    Sent, Attack lab. Every task runs twice on two copies of the same world (ordinary vs WARRANT); each outgoing
    action is a ticket that travels through WARRANT's checkpoints and is stamped where it was stopped. */
-(() => {
+(async () => {
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -138,7 +138,7 @@
     const flagged = (w.emails || []).filter((e) => e.suspicious);
     const quick = [DAILY.find((d) => d.icon === "inbox"), DAILY[0], DAILY.find((d) => d.icon === "hash"), DAILY.find((d) => d.icon === "calendar")].filter(Boolean);
     P.innerHTML = `
-      <div class="dhead"><p class="greet">Good ${part}, Arjun</p><time>${new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "short", year: "numeric" })}</time></div>
+      <div class="dhead"><p class="greet">Good ${part}${S.user ? `, ${esc(S.user.name.split(" ")[0])}` : ""}</p><time>${new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "short", year: "numeric" })}</time></div>
       <div class="stats">
         ${stat("gmail", "", (w.emails || []).length, "Emails in your inbox", flagged.length ? `${flagged.length} flagged` : "Summarise", flagged.length ? "#/inbox/attention" : "do:inbox")}
         ${stat("slack", "", (w.slack || []).length, "Slack updates", "View", "#/slack")}
@@ -415,7 +415,7 @@
   }
   function renderChat() { renderRail(); }
   function renderRail() {
-    const accts = { gmail: "arjun@acme.test", slack: "warrant-demo workspace", bank: "IN07 ACME · demo bank", drive: `${(S.world?.files || []).length} files · demo` };
+    const accts = { gmail: S.conns.gmail === "live" ? "your real Gmail inbox" : (S.user?.email || "demo inbox"), slack: "warrant-demo workspace", bank: "IN07 ACME · demo bank", drive: `${(S.world?.files || []).length} files · demo` };
     $("#railApps").innerHTML = SVC.map(([k, l, ic]) => `<div class="rapp"><span class="app-ico">${logo(k)}</span><div><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(accts[k])}</span></div><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : "Demo"}</span></div>`).join("");
     $("#railQuick").innerHTML = DAILY.slice(0, 5).map((f, i) => `<button type="button" data-i="${i}">${icon(f.icon)}${esc(f.title)}</button>`).join("")
       + `<button type="button" class="more" id="railMore"><span>${icon("bolt")}Try an attack</span>${icon("arrow")}</button>`;
@@ -647,11 +647,33 @@
     if (S.busy) { $$("button", box).forEach((x) => x.disabled = true); $(".hint", box).textContent = "you can decide when both assistants finish"; }
     $$("button", box).forEach((b) => b.onclick = async () => {
       const yes = b.dataset.a === "1";
+      if (yes && S.otp?.required) { await askCode(T, t, ev, box); return; }
       $$("button", box).forEach((x) => x.disabled = true);
       $(".hint", box).textContent = yes ? "sending…" : "";
       try { const r = await api("approve", { sid: S.sid, id: String(ev.id), approve: yes }); applyDecision(T, t, yes, r); touch(T); refreshWorld(); }
       catch (e) { $(".hint", box).textContent = e.message; $$("button", box).forEach((x) => x.disabled = false); }
     });
+  }
+  // OTP approval: the code goes to the user's phone (never to the agent) and releases only this exact action.
+  async function askCode(T, t, ev, box) {
+    $$("button", box).forEach((x) => x.disabled = true);
+    $(".hint", box).textContent = "sending a WhatsApp code…";
+    try {
+      const r = await api("approve/otp", { sid: S.sid, id: String(ev.id) });
+      box.innerHTML = `<input class="code" placeholder="000000" inputmode="numeric" maxlength="6" aria-label="Code from WhatsApp">
+        <button class="btn brand" type="button" data-c="1">${icon("check")}Confirm</button><button class="btn ghost" type="button" data-c="0">Reject</button>
+        <span class="hint wa">Code sent to ${esc(r.to)}${r.test_key ? " (test key)" : ""}</span>`;
+      const input = $("input.code", box);
+      input.focus();
+      const go = async () => {
+        $$("button", box).forEach((x) => x.disabled = true);
+        try { const res = await api("approve", { sid: S.sid, id: String(ev.id), approve: true, code: input.value.trim() }); applyDecision(T, t, true, res); touch(T); refreshWorld(); }
+        catch (e) { $(".hint", box).textContent = e.message; $(".hint", box).className = "hint err2"; $$("button", box).forEach((x) => x.disabled = false); input.select(); }
+      };
+      $('[data-c="1"]', box).onclick = go;
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+      $('[data-c="0"]', box).onclick = async () => { try { const res = await api("approve", { sid: S.sid, id: String(ev.id), approve: false }); applyDecision(T, t, false, res); touch(T); } catch (e) { toast(e.message); } };
+    } catch (e) { $(".hint", box).textContent = e.message; $$("button", box).forEach((x) => x.disabled = false); }
   }
   function applyDecision(T, t, yes, r) {
     $(".approve", t.el)?.remove();
@@ -665,8 +687,8 @@
       moveRunner(rt, CHECKPOINTS.length - 1);
       $$(".fld-row.warn", tk).forEach((row) => { row.classList.remove("warn"); setMark(row, "y"); });
       setMark($(".fld-row.auth", tk), "y");
-      $(".fld-row.auth span:nth-child(2)", tk).textContent = "you approved it (confirmed for next time)";
-      stamp(tk, "ok", "Approved", "sent by you");
+      $(".fld-row.auth span:nth-child(2)", tk).textContent = r.method === "otp" || S.otp?.required ? "you approved it with a WhatsApp code (confirmed for next time)" : "you approved it (confirmed for next time)";
+      stamp(tk, "ok", "Approved", S.otp?.required ? "verified on WhatsApp" : "sent by you");
       why.className = "why ok"; why.innerHTML = `<b>You approved it.</b> Sent now, and this ${/money|transaction/.test(t.ev.function) ? "payee" : "recipient"} counts as confirmed from now on.`;
       if (t.step) { t.step.st = "ok"; t.step.sub = "approved by you and sent"; }
       if (r.effects?.length) T.effects.warrant = [...(T.effects.warrant || []), ...r.effects];
@@ -764,6 +786,47 @@
   }
 
   wire();
+  function renderOtpBox() {
+    const box = $("#otpBox");
+    if (!S.otp?.available) { box.hidden = true; return; }
+    box.hidden = false;
+    const head = `<b>${icon("shield")}WhatsApp approvals</b>`;
+    if (S.otp.required) {
+      box.innerHTML = `${head}<span class="ok">On.</span> Approving a paused action needs the code sent to <b style="display:inline">${esc(S.user.phone)}</b>.`;
+      return;
+    }
+    box.innerHTML = `${head}Get a WhatsApp code before any paused action is released.${S.otp.test_key ? " (test key: no real message)" : ""}
+      <div class="row2"><input id="otpPhone" placeholder="+91 98765 43210" inputmode="tel"><button class="btn sm" id="otpSend" type="button">Send code</button></div>
+      <div class="row2" id="otpCodeRow" hidden><input id="otpCode" placeholder="6-digit code" inputmode="numeric" maxlength="6"><button class="btn brand sm" id="otpVerify" type="button">Verify</button></div>
+      <div class="err" id="otpErr"></div>`;
+    $("#otpSend").onclick = async () => {
+      $("#otpErr").textContent = "";
+      try { const r = await api("phone/send", { phone: $("#otpPhone").value }); $("#otpCodeRow").hidden = false; $("#otpErr").textContent = ""; toast(`Code sent to ${r.to} on WhatsApp`); $("#otpCode").focus(); }
+      catch (e) { $("#otpErr").textContent = e.message; }
+    };
+    $("#otpVerify").onclick = async () => {
+      try { const r = await api("phone/verify", { code: $("#otpCode").value }); toast(`Verified ${r.phone}. Approvals now need a WhatsApp code.`); await loadMe(); }
+      catch (e) { $("#otpErr").textContent = e.message; }
+    };
+  }
+  async function loadMe() {
+    try {
+      const d = await api("me");
+      S.user = d.user; S.demo = d.demo; S.otp = d.otp || {};
+      renderOtpBox();
+      const initials = (d.user.name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+      $("#setBtn").textContent = initials;
+      $("#meName").textContent = d.user.name;
+      $("#meEmail").textContent = `${d.user.email}${d.demo ? " · demo profile" : ""}`;
+      if (!store.get() && d.last_session) store.set(d.last_session);
+      if (d.user.picture) { $("#setBtn").classList.add("pic"); $("#setBtn").style.backgroundImage = `url("${d.user.picture.replace(/"/g, "")}")`; }
+      const st = await api("../../auth/status").catch(() => ({}));
+      const link = $("#authLink");
+      if (st.signed_in) { link.textContent = "Sign out"; link.href = "/auth/logout"; link.hidden = false; }
+      else if (st.configured) { link.textContent = "Sign in with Google"; link.href = "/auth/google/login"; link.hidden = false; }
+    } catch (e) { $("#setBtn").textContent = "?"; }
+  }
+  await loadMe();
   const saved = store.get();
   (saved ? restoreSession(saved).catch(() => newSession()) : newSession())
     .then(() => { render(); renderChat(); })
