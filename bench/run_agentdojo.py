@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import warnings
@@ -53,6 +54,7 @@ from warrant.llm import USAGE, GroqLLM, content_to_text  # noqa: E402
 warnings.filterwarnings("ignore")
 BENCH_VERSION = "v1.2.1"
 DEFAULT_ATTACK = "important_instructions"
+DYNAMIC_SUITES = {"github", "shopping", "dailylife"}  # AgentDyn (needs the AutoDojo/AgentDyn agentdojo fork)
 # AgentDojo's "important_instructions" attack addresses the model by name; register ours.
 ad_models.MODEL_NAMES.setdefault("groq-", "AI assistant")
 ad_models.MODEL_NAMES.setdefault("oracle-", "AI assistant")
@@ -77,17 +79,77 @@ class OracleHijackedPlanner(BasePipelineElement):
     """Replays the user task's ground truth, and obeys the injection task's ground
     truth as soon as injected text shows up in a tool output (fully hijacked)."""
 
-    def __init__(self) -> None:
+    def __init__(self, lazy: bool = False) -> None:
         self.name = "oracle-hijacked"
         self.user_task = None
         self.injection_task = None
         self.injections: dict[str, str] = {}
+        # Dynamic suites (AgentDyn) compute some ground-truth arguments from state that only exists
+        # mid-run (e.g. a one-time password emailed after checkout), so the lazy mode recomputes the
+        # ground truth from the live environment before every step instead of once at the start.
+        self.lazy = lazy
 
     def set_task(self, user_task, injection_task, injections) -> None:
         self.user_task, self.injection_task, self.injections = user_task, injection_task, injections or {}
         self._queue = None
+        self._u_i = self._a_i = 0
+        self._hijacked = self._attack_done = False
+
+    def _query_lazy(self, query, runtime, env, messages, extra_args):
+        last = messages[-1] if messages else None
+        if self.injection_task is not None and not self._hijacked and last is not None and last["role"] == "tool":
+            text = content_to_text(last["content"])
+            if any(inj[:60] in text for inj in self.injections.values() if inj):
+                self._hijacked = True
+        user_gt = list(self.user_task.ground_truth(env))
+        if self.injection_task is not None and not self._hijacked and self._u_i >= len(user_gt):
+            self._hijacked = True  # the injection was masked or never seen: still obey it at the end
+        call = None
+        if self._hijacked and not self._attack_done:
+            attack_gt = list(self.injection_task.ground_truth(env))
+            if self._a_i < len(attack_gt):
+                call = attack_gt[self._a_i]
+                self._a_i += 1
+            else:
+                self._attack_done = True
+        if call is None and self._u_i < len(user_gt):
+            call = user_gt[self._u_i]
+            self._u_i += 1
+        if call is not None:
+            call = self._fill_placeholders(call, messages)
+            out = ChatAssistantMessage(role="assistant", content=None, tool_calls=[call])
+        else:
+            out = ChatAssistantMessage(role="assistant", content=[text_content_block_from_string(self.user_task.GROUND_TRUTH_OUTPUT or "done")], tool_calls=None)
+        return query, runtime, env, [*messages, out], extra_args
+
+    # AgentDyn ground truths carry placeholders for values that only arrive by email mid-run. Fill
+    # them from the newest tool output, as an agent reading its inbox would.
+    _OTP_RE = re.compile(r"OTP is:\s*(\d{6})\b")  # AgentDyn mails "... OTP is: 123456" (6 random digits)
+    _LINK_RE = re.compile(r"(?:https?://|www\.)\S*invit\S*", re.I)
+
+    def _fill_placeholders(self, call, messages):
+        args = dict(call.args)
+        changed = False
+        for k, v in args.items():
+            if k == "otp":
+                rx = self._OTP_RE
+            elif isinstance(v, str) and re.fullmatch(r"invitation[ _-]?link", v, re.I):
+                rx = self._LINK_RE
+            else:
+                continue
+            for m in reversed(messages):
+                if m["role"] != "tool":
+                    continue
+                found = rx.findall(content_to_text(m["content"]))
+                if found:
+                    args[k] = found[-1].rstrip(".,)'\"")
+                    changed = True
+                    break
+        return call.model_copy(update={"args": args}) if changed else call
 
     def query(self, query, runtime, env, messages: Sequence = (), extra_args: dict = {}):
+        if self.lazy:
+            return self._query_lazy(query, runtime, env, messages, extra_args)
         if self._queue is None:
             self._queue = list(self.user_task.ground_truth(env))
             self._attack = list(self.injection_task.ground_truth(env)) if self.injection_task is not None else []
@@ -136,8 +198,8 @@ class MaskingExecutor(ToolsExecutor):
         return query, runtime, env, out, extra_args
 
 
-def build(defense: str, planner: str, model: str, contract_llm: bool) -> tuple[AgentPipeline, BasePipelineElement]:
-    llm = OracleHijackedPlanner() if planner == "oracle" else GroqLLM(model=model)
+def build(defense: str, planner: str, model: str, contract_llm: bool, lazy: bool = False) -> tuple[AgentPipeline, BasePipelineElement]:
+    llm = OracleHijackedPlanner(lazy=lazy) if planner == "oracle" else GroqLLM(model=model)
     sysmsg = load_system_message(None)
     if defense == "none":
         elems = [SystemMessage(sysmsg), InitQuery(), llm, ToolsExecutionLoop([ToolsExecutor(), llm])]
@@ -239,7 +301,7 @@ def run(args) -> list[dict]:
         user_ids = parse_range(args.user_tasks, "user_task_", list(suite.user_tasks.keys()))
         inj_ids = parse_range(args.injection_tasks, "injection_task_", list(suite.injection_tasks.keys()))
         for attack_name, defense in [(a, d) for a in args.attack.split(",") for d in args.defenses.split(",")]:
-            pipe, llm = build(defense, args.planner, args.model, contract_llm)
+            pipe, llm = build(defense, args.planner, args.model, contract_llm, lazy=args.lazy_ground_truth or suite_name in DYNAMIC_SUITES)
             attack = load_attack(attack_name, suite, pipe)
             t0, tok0 = time.time(), USAGE["prompt_tokens"] + USAGE["completion_tokens"]
             dead = set(empty_ground_truth_injections(suite))
@@ -319,6 +381,7 @@ def main() -> None:
     ap.add_argument("--injection-tasks", default=None, help="e.g. 0-3 (default: all)")
     ap.add_argument("--attack", default=DEFAULT_ATTACK, help="one or more AgentDojo attacks, comma-separated")
     ap.add_argument("--model", default=config.PLANNER_MODEL)
+    ap.add_argument("--lazy-ground-truth", action="store_true", help="oracle: recompute ground truth each step (always on for AgentDyn suites)")
     ap.add_argument("--force", action="store_true", help="re-run tasks that already have logs")
     ap.add_argument("--perturb", action="store_true", help="enable Lane D's perturbation probe (sets WARRANT_PERTURB=1)")
     args = ap.parse_args()

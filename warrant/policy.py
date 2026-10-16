@@ -18,6 +18,7 @@ class Effect(str, Enum):
     PAY = "PAY"            # money moves
     DELETE = "DELETE"      # destroys data
     ACCOUNT = "ACCOUNT"    # changes credentials / identity
+    FORM = "FORM"          # submits data to a web form (log in, pay, register) on a site
 
 
 class Sink(str, Enum):
@@ -29,6 +30,7 @@ class Sink(str, Enum):
     SECRET = "secret"          # passwords
     PROFILE = "profile"        # identity fields (name, address)
     TARGET = "target"          # booking target (hotel, restaurant, company)
+    RECORD = "record"          # must come from the user (typed) or their own records: ssh keys, order ids
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,65 @@ POLICIES: dict[str, ToolPolicy] = {
     "reserve_hotel": P(E.BOOK, {"hotel": S.TARGET}),
     "reserve_car_rental": P(E.BOOK, {"company": S.TARGET}),
     "reserve_restaurant": P(E.BOOK, {"restaurant": S.TARGET}),
+    # ---------------- AgentDyn (github / shopping / dailylife) ----------------
+    # Cross-checked against ROPE's audited parameter table (github.com/xhOwenMa/ROPE, scopes/_floor).
+    # Logins and one-time-password steps are procedural: AgentDyn pages legitimately ask for them
+    # ("please log in first"), so they are READ (no user data changes); every state change after them
+    # is still gated.
+    "login_github_account": P(E.READ),
+    "verify_github_account": P(E.READ),
+    "login_shopping_account": P(E.READ),
+    "verify_shopping_account": P(E.READ),
+    "verify_transaction": P(E.READ),
+    "browse_webpage": P(E.READ, {"url": S.URL}),  # URLs can smuggle data out
+    "input_to_webpage": P(E.FORM, {"url": S.URL}),
+    "get_github_linked_unread_emails": P(E.READ),
+    "get_shopping_linked_unread_emails": P(E.READ),
+    "get_shopping_linked_received_emails": P(E.READ),
+    "get_logged_in_github_user_information": P(E.READ, trusted_source=True),
+    "get_shopping_account_user_information": P(E.READ, trusted_source=True),
+    "git_get_linked_ssh_keys": P(E.READ, trusted_source=True),
+    "view_order_history": P(E.READ, trusted_source=True),
+    "view_cart": P(E.READ, trusted_source=True),
+    "cart_total": P(E.READ),
+    "view_available_discounts": P(E.READ, trusted_source=True),
+    "search_product": P(E.READ),
+    "get_invoice": P(E.READ),
+    # local files
+    "list_directory": P(E.READ),
+    # Local staging: nothing outside the user's own machine or cart changes. They are READ for the
+    # effect check, but their URL / id arguments are still checked (a download URL can carry data out).
+    "create_dir": P(E.READ),
+    "copy_node": P(E.WRITE, {"source_path": S.RESOURCE}),
+    "move_node": P(E.WRITE, {"source_path": S.RESOURCE}),
+    "delete_node": P(E.DELETE, {"path": S.RESOURCE}),
+    "download_file_through_url": P(E.READ, {"url": S.URL}),
+    "download_file_through_id": P(E.READ, {"file_id": S.RESOURCE}),
+    # github
+    "git_create_repo": P(E.WRITE),
+    "git_delete_repo": P(E.DELETE, {"repo_name": S.RESOURCE}),
+    "git_transfer_repo_ownership": P(E.EGRESS, {"repo_name": S.RESOURCE, "new_owner_username": S.RECIPIENT, "new_owner_email": S.RECIPIENT}),
+    "git_clone": P(E.WRITE, {"repo_name": S.RESOURCE}),
+    "git_invite_collaborators": P(E.WRITE, {"repo_name": S.RESOURCE, "collaborator_email": S.RECIPIENT}),
+    "git_push": P(E.WRITE, {"local_path": S.RESOURCE}),
+    "git_pull": P(E.WRITE, {"repo_name": S.RESOURCE}),
+    "git_issue": P(E.EGRESS, {"repo_name": S.RECIPIENT}),
+    "git_star": P(E.WRITE, {"repo_name": S.RESOURCE}),
+    "git_unstar": P(E.WRITE, {"repo_name": S.RESOURCE}),
+    "git_add_ssh_key": P(E.ACCOUNT, {"ssh_key": S.RECORD}),
+    "git_delete_ssh_key": P(E.ACCOUNT, {"ssh_key": S.RECORD}),
+    "update_github_account_password": P(E.ACCOUNT, {"password": S.SECRET}),
+    # shopping
+    # The cart is staging; money moves only at checkout (PAY).
+    "cart_add_product": P(E.READ, {"product_id": S.RESOURCE}),
+    "cart_remove_product": P(E.READ, {"product_id": S.RESOURCE}),
+    "clear_cart": P(E.READ),
+    "checkout_selected_cart": P(E.PAY, {"product_ids": S.RESOURCE}),
+    "refund_order": P(E.PAY, {"order_id": S.RECORD}),
+    "update_shopping_account_password": P(E.ACCOUNT, {"password": S.SECRET}),
+    "update_shopping_account_user_info": P(E.ACCOUNT, {
+        "first_name": S.PROFILE, "last_name": S.PROFILE, "id_number": S.PROFILE, "email": S.PROFILE,
+        "phone_number": S.PROFILE, "address": S.PROFILE, "passport_number": S.PROFILE, "bank_account_number": S.IBAN}),
 }
 
 _READ_PREFIXES = ("get_", "list_", "read_", "search_", "check_")
