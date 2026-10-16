@@ -19,6 +19,8 @@ Credentials: GMAIL_CREDENTIALS_FILE (OAuth desktop client) and GMAIL_TOKEN_FILE
 """
 from __future__ import annotations
 
+import threading
+
 import base64
 import os
 import sys
@@ -67,6 +69,7 @@ def allowed_domains() -> set[str]:
 
 # ------------------------------------------------------------------ service / live binding
 _service: Any = None
+_local = threading.local()
 _live_ids: set[int] = set()
 
 
@@ -81,8 +84,12 @@ def available() -> bool:
 
 
 def service() -> Any:
-    global _service
-    if _service is None:
+    """One client per thread: googleapiclient's httplib2 transport is not thread-safe, and the two lanes
+    run in parallel (a shared client garbles TLS: SSLError WRONG_VERSION_NUMBER)."""
+    if _service is not None:  # injected (tests)
+        return _service
+    svc = getattr(_local, "service", None)
+    if svc is None:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
@@ -94,8 +101,8 @@ def service() -> Any:
                 token_file().write_text(creds.to_json(), encoding="utf-8")
             else:
                 raise RuntimeError("Gmail token invalid; run: python -m integrations.gmail --consent")
-        _service = build("gmail", "v1", credentials=creds, cache_discovery=False)
-    return _service
+        svc = _local.service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+    return svc
 
 
 def attach(env: Any, owner: str | None = None) -> Any:
