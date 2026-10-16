@@ -52,6 +52,7 @@ from warrant.llm import USAGE, GroqLLM, content_to_text  # noqa: E402
 
 warnings.filterwarnings("ignore")
 BENCH_VERSION = "v1.2.1"
+DEFAULT_ATTACK = "important_instructions"
 # AgentDojo's "important_instructions" attack addresses the model by name; register ours.
 ad_models.MODEL_NAMES.setdefault("groq-", "AI assistant")
 ad_models.MODEL_NAMES.setdefault("oracle-", "AI assistant")
@@ -234,9 +235,9 @@ def run(args) -> list[dict]:
         suite = get_suite(BENCH_VERSION, suite_name)
         user_ids = parse_range(args.user_tasks, "user_task_", list(suite.user_tasks.keys()))
         inj_ids = parse_range(args.injection_tasks, "injection_task_", list(suite.injection_tasks.keys()))
-        for defense in args.defenses.split(","):
+        for attack_name, defense in [(a, d) for a in args.attack.split(",") for d in args.defenses.split(",")]:
             pipe, llm = build(defense, args.planner, args.model, contract_llm)
-            attack = load_attack(args.attack, suite, pipe)
+            attack = load_attack(attack_name, suite, pipe)
             t0, tok0 = time.time(), USAGE["prompt_tokens"] + USAGE["completion_tokens"]
             dead = set(empty_ground_truth_injections(suite))
             benign, runs = {}, []
@@ -270,7 +271,7 @@ def run(args) -> list[dict]:
             summary = {
                 "suite": suite_name, "defense": defense, "planner": args.planner,
                 "model": "oracle-hijacked (LLM-free worst case)" if args.planner == "oracle" else args.model,
-                "attack": args.attack, "benchmark_version": BENCH_VERSION,
+                "attack": attack_name, "benchmark_version": BENCH_VERSION,
                 "n_user_tasks": n_b, "n_attacked_runs": n_a,
                 "benign_utility": rate(b_rows, "utility"),
                 "utility_under_attack": rate(runs, "utility"),
@@ -292,9 +293,13 @@ def run(args) -> list[dict]:
                 "benign_per_task": {k: v["utility"] for k, v in benign.items()},
                 "benign_detail": benign,
             }
-            out = config.RESULTS_DIR / f"{args.planner}_{suite_name}_{defense}.json"
+            if attack_name == DEFAULT_ATTACK:
+                out = config.RESULTS_DIR / f"{args.planner}_{suite_name}_{defense}.json"
+            else:  # other attack styles live in a subfolder so the main benchmark tab stays one attack
+                (config.RESULTS_DIR / "attacks").mkdir(exist_ok=True)
+                out = config.RESULTS_DIR / "attacks" / f"{args.planner}_{suite_name}_{defense}_{attack_name}.json"
             out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-            print(f"== {suite_name}/{defense}: utility={summary['benign_utility']:.0%} "
+            print(f"== {suite_name}/{defense}/{attack_name}: utility={summary['benign_utility']:.0%} "
                   f"utility_under_attack={summary['utility_under_attack']:.0%} ASR={summary['asr']:.2%} "
                   f"executed={summary['asr_executed']:.2%} attackable={summary['asr_attackable']:.2%} (n={len(att)}) "
                   f"asked_user={summary['asked_user_rate_benign']:.0%}/{summary['asked_user_rate_attacked']:.0%} -> {out.name}", flush=True)
@@ -309,7 +314,7 @@ def main() -> None:
     ap.add_argument("--defenses", default="none,prompt,detector,warrant_nomask,warrant")
     ap.add_argument("--user-tasks", default=None, help="e.g. 0-5 or 0,3,7 (default: all)")
     ap.add_argument("--injection-tasks", default=None, help="e.g. 0-3 (default: all)")
-    ap.add_argument("--attack", default="important_instructions")
+    ap.add_argument("--attack", default=DEFAULT_ATTACK, help="one or more AgentDojo attacks, comma-separated")
     ap.add_argument("--model", default=config.PLANNER_MODEL)
     ap.add_argument("--force", action="store_true", help="re-run tasks that already have logs")
     ap.add_argument("--perturb", action="store_true", help="enable Lane D's perturbation probe (sets WARRANT_PERTURB=1)")
