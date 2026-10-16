@@ -839,6 +839,16 @@ class WarrantGate(BasePipelineElement):
         if pol.effect != Effect.READ or any(s == Sink.URL for s in pol.sinks.values()):
             decision["checks"] += self._secret_check(state, call, pol)
         # --- perturbation hook (lane D) ---
+        import os as _os  # noqa: PLC0415
+        if _os.environ.get("WARRANT_PERTURB") == "1":
+            from .perturb import check as _perturb_check  # noqa: PLC0415
+
+            _probe = _perturb_check(state, call, decision, planner=getattr(state, "planner", None),
+                                    context=getattr(state, "perturb_ctx", None))
+            if _probe:
+                decision["checks"].append(_probe["check"])
+                self.emit("perturb", **_probe["event"])
+                append_audit(self.audit_dir, state, _probe["audit"], self.emit)
         # --- end perturbation hook ---
         bad = [x for x in decision["checks"] if x["verdict"] != ALLOWED]
         if bad:
