@@ -96,7 +96,9 @@ class Session:
 
     def reset(self) -> None:
         world = full_world()
-        self.lanes = {"warrant": Lane(world), "undefended": Lane(copy.deepcopy(world))}
+        # Two independently built worlds, not a deepcopy: a deep copy of the Slack link is a dry run
+        # (that is how the gate previews a send), so the undefended agent's messages would never be sent.
+        self.lanes = {"warrant": Lane(world), "undefended": Lane(full_world())}
         self.turns = 0
 
 
@@ -149,6 +151,7 @@ def snapshot(env: AcmeEnv) -> dict:
         "sent": len(env.inbox.sent), "payments": len(env.bank.history), "shares": len(env.drive.shares),
         "events": len(env.calendar), "files": {f.id: f"{f.folder}/{f.name}" for f in env.drive.files},
         "ibans": {t.recipient_iban for t in env.bank.history},
+        "slack": len(env.slack.outbox),
     }
 
 
@@ -175,6 +178,10 @@ def side_effects(before: dict, env: AcmeEnv) -> list[dict]:
     for ev in env.calendar[before["events"]:]:
         out.append({"kind": "event", "text": f"Event '{ev.title}' on {ev.date}", "detail": ", ".join(ev.participants),
                     "outside": any(_external_email(p, known_emails) for p in ev.participants)})
+    for p in env.slack.outbox[before.get("slack", 0):]:
+        if p.committed:
+            where = f"#{p.target}" if p.kind == "channel" else f"DM to {p.target}"
+            out.append({"kind": "slack", "text": f"Slack {where}", "detail": p.body[:200], "outside": False})
     now = {f.id for f in env.drive.files}
     for fid, path in before["files"].items():
         if fid not in now:
@@ -191,7 +198,16 @@ def workspace(env: AcmeEnv) -> dict:
         "bank": [{"id": str(t.id), "title": f"INR {t.amount:,.0f} → {t.recipient_name or t.recipient_iban}", "sub": f"{t.date} · {t.subject}"} for t in env.bank.history],
         "calendar": [{"id": e.id, "title": e.title, "sub": f"{e.date} · {', '.join(e.participants)}"} for e in env.calendar],
         "sent": [{"id": e.id, "title": e.subject, "sub": f"to {', '.join(e.recipients)}"} for e in env.inbox.sent],
+        "slack": _slack_items(env),
     }
+
+
+def _slack_items(env: AcmeEnv) -> list[dict]:
+    if env.slack.live:
+        return [{"id": "live", "title": "Real Slack workspace", "sub": "connected with SLACK_BOT_TOKEN; the agent reads it live"}]
+    sim = env.slack.sim
+    return [{"id": f"#{ch}", "title": f"#{ch}", "sub": " · ".join(f"{m.sender}: {m.body[:60]}" for m in sim.channel_inbox.get(ch, [])[-2:]) or "no messages"}
+            for ch in sim.channels]
 
 
 def item_text(env: AcmeEnv, kind: str, item_id: str) -> tuple[str, str]:
@@ -203,6 +219,9 @@ def item_text(env: AcmeEnv, kind: str, item_id: str) -> tuple[str, str]:
         for f in env.drive.files:
             if f.id == item_id:
                 return f"{f.folder}/{f.name}", f.content
+    if kind == "slack" and not env.slack.live and item_id.lstrip("#") in env.slack.sim.channels:
+        msgs = env.slack.sim.channel_inbox.get(item_id.lstrip("#"), [])
+        return item_id, "\n".join(f"{m.sender}: {m.body}" for m in msgs) or "(no messages)"
     if kind == "web" and item_id in env.web.pages:
         return item_id, env.web.pages[item_id]
     raise HTTPException(404, "item not found")
