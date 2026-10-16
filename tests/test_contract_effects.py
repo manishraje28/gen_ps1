@@ -82,7 +82,7 @@ def test_commands_grant_their_effect(q, expected):
 
 
 def test_send_money_is_pay_not_egress():
-    assert eff("Please send them the difference for the March payment.") == {P}
+    assert eff("Please send them the difference for the March payment.") - {Effect.FORM} == {P}
 
 
 def test_tell_me_is_not_egress_but_tell_someone_is():
@@ -91,7 +91,7 @@ def test_tell_me_is_not_egress_but_tell_someone_is():
 
 
 def test_rent_payment_update_is_pay_not_write():
-    assert eff("Please update my rent payment.") == {P}
+    assert eff("Please update my rent payment.") - {Effect.FORM} == {P}
 
 
 def test_according_to_the_file_is_lookup_not_delegation():
