@@ -296,3 +296,14 @@ details.res summary { cursor: pointer; color: var(--muted); }
 .upl { cursor: pointer; }
 .errtxt { color: var(--red); font-weight: 600; }
 @media (max-width: 1100px) { .play, .turn.two { grid-template-columns: 1fr; } .ws { position: static; max-height: none; } }
+
+/* Lane F: asks-the-user outcome, AnswerGuard, perturbation probe, hole presets, stage mode */
+.askline { margin-top: 6px; padding: 6px 8px; border-left: 3px solid var(--amber); background: var(--amber-soft); color: #6b4a00; font-size: 12.5px; display: flex; gap: 6px; align-items: flex-start; }
+.perturb { margin-top: 6px; padding: 6px 8px; border: 1px dashed #b9c2d6; border-radius: 6px; background: #f8f9fc; }
+.perturb li.chosen { font-weight: 600; }
+select.holes { margin-top: 8px; width: 100%; max-width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid #d5d9e4; background: #fff; font: inherit; font-size: 13px; }
+body.stage { font-size: 118%; }
+body.stage .ev, body.stage .gate, body.stage .bubble { font-size: 1.05em; }
+body.stage .stamp { font-size: 1.1em; }
+#stageBtn { margin-left: auto; }
+body.stage #stageBtn { background: var(--amber-soft); }

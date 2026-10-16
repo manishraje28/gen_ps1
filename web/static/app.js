@@ -249,7 +249,7 @@ function handle(ev) {
       }).join("");
       const div = document.createElement("div");
       div.className = `gate ${ev.decision}`;
-      div.innerHTML = `<div><span class="code">${esc(ev.code)}</span> · ${esc(ev.reason)}</div>${checks ? `<ul class="checks">${checks}</ul>` : ""}`;
+      div.innerHTML = `<div><span class="code">${esc(ev.code)}</span> · ${esc(ev.reason)}</div>${checks ? `<ul class="checks">${checks}</ul>` : ""}${askLine(ev)}`;
       card.appendChild(div);
       if (ev.decision !== "ALLOWED") flash("gate", true);
       break;
@@ -308,6 +308,14 @@ function handle(ev) {
     case "verdict":
       renderVerdict(lane, ev);
       break;
+    case "answer_guard":
+      push(lane, answerGuardHtml(ev), "final");
+      break;
+    case "perturb": {
+      const card = S.cards[lane][ev.id];
+      if (card) card.insertAdjacentHTML("beforeend", perturbHtml(ev));
+      break;
+    }
     case "lane_done":
       setStatus(lane, "done");
       break;
@@ -348,8 +356,28 @@ function renderResult(text, dirSpans) {
   out += esc(text.slice(pos));
   return out.replace(/\[WARRANT: instruction-like text removed from untrusted data \(span ([\w.]+)\)\]/g, '<mark class="masked">masked by Span Auditor · span $1</mark>');
 }
+/* NEEDS_INPUT is a scored outcome ("asks the user"), not a failure. */
+function askLine(ev) {
+  if (ev.decision !== "NEEDS_INPUT") return "";
+  return `<div class="askline">${icon("alert")}<b>Asks the user.</b> WARRANT paused this action and would show a confirmation card: nothing was executed, and the user decides.</div>`;
+}
+function answerGuardHtml(ev) {
+  const items = (ev.redactions || []).map((r) => `<li><span class="val">${esc(String(r.value))}</span> <span class="prov">${esc(r.type || "")} · ${esc(r.why || "")}</span></li>`).join("");
+  return `<div class="row">${icon("shield")}<b>AnswerGuard removed ${(ev.redactions || []).length} unwarranted item(s) from the final answer</b></div><ul class="checks">${items}</ul>`;
+}
+/* Lane D probe event: {id, verdict, code?, chosen_span, fakes:[{fake, original, span}], runs, extra_calls} */
+function perturbHtml(ev) {
+  const rows = (ev.fakes || []).map((f) => `<li class="${f.span === ev.chosen_span ? "chosen" : ""}"><span class="val">${esc(f.original)}</span> → <span class="mono">${esc(f.fake)}</span> <span class="prov">span ${esc(f.span || "?")}${f.span === ev.chosen_span ? " · picked by the agent" : ""}</span></li>`).join("");
+  return `<div class="perturb"><div class="prov">${icon("scan")} counterfactual relabeling probe · ${esc(ev.verdict || "")}${ev.code ? ` (${esc(ev.code)})` : ""} · ${ev.extra_calls ?? "?"} extra call(s)</div><ul class="checks">${rows}</ul></div>`;
+}
+function toggleStage() {
+  document.body.classList.toggle("stage");
+  try { localStorage.setItem("warrantStage", document.body.classList.contains("stage") ? "1" : ""); } catch (e) {}
+}
+try { if (localStorage.getItem("warrantStage")) document.body.classList.add("stage"); } catch (e) {}
+
 function effectPills(list) {
-  const all = ["READ", "WRITE", "EGRESS", "PAY", "DELETE", "ACCOUNT"];
+  const all = ["READ", "WRITE", "EGRESS", "PAY", "BOOK", "DELETE", "ACCOUNT"];
   return all.map((e) => `<span class="pill ${list.includes(e) ? "on" : "off"}">${e}</span>`).join("");
 }
 function renderContract(c) {
