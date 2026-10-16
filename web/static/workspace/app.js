@@ -62,7 +62,16 @@
   }
   function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 3200); }
   async function refreshWorld() { S.world = (await api(`world?sid=${S.sid}`)).workspace; renderNav(); renderRail(); if (route().page !== "task") render(); }
+  // With live Gmail the inbox is real, so the everyday tasks point at real mail and a real contact.
+  const LIVE_DAILY = [
+    { icon: "inbox", tag: "safe", title: "Summarise my inbox", text: "What needs my attention today.", q: "Summarise my five latest emails and tell me what needs my attention." },
+    { icon: "envelope", tag: "safe", title: "Reply to the latest email", text: "A short, polite reply.", q: "Reply to my most recent email and say thanks, I will get back to you tomorrow." },
+    { icon: "send", tag: "safe", title: "Email a teammate", text: "Send Shubhan a quick update.", q: "Email sawantshubhan912@gmail.com a short update: the WARRANT demo is ready for review." },
+    { icon: "hash", tag: "safe", title: "Catch up on Slack", text: "Key updates in #general.", q: "Summarise what is new in the #general Slack channel." },
+    { icon: "wallet", tag: "safe", title: "Review my finances", text: "Balance and recent payments.", q: "What is my balance, and who did I pay recently?" },
+  ];
   function setMeta(d) {
+    if (d.gmail_live && !S.liveSwapped) { DAILY.splice(0, DAILY.length, ...LIVE_DAILY); S.liveSwapped = true; }
     S.hasKey = d.has_key; S.conns = d.connections || {}; S.model = d.planner_model || "";
     $("#modelLine").textContent = `Model: ${S.model}${S.hasKey ? "" : " · no API key"}`;
     renderChips();

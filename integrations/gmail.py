@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import os
 import sys
+import time
 from email.message import EmailMessage
 from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
@@ -171,6 +172,17 @@ def _fetch(query: str = "", n: int = 20) -> list[Email]:
     listing = msgs.list(userId="me", q=query or "in:inbox", maxResults=n).execute()
     out = [to_email(msgs.get(userId="me", id=r["id"], format="full").execute()) for r in listing.get("messages", []) or []]
     return sorted(out, key=lambda e: e.date, reverse=True)
+
+
+_snapshot: tuple[float, list[Email]] = (0.0, [])
+
+
+def snapshot(ttl: float = 30.0) -> list[Email]:
+    """The live inbox for the UI's panels, cached briefly so page refreshes don't hit the API each time."""
+    global _snapshot
+    if time.monotonic() - _snapshot[0] > ttl:
+        _snapshot = (time.monotonic(), _fetch())
+    return _snapshot[1]
 
 
 def build_message(sender: str, recipients: list[str], subject: str, body: str,
