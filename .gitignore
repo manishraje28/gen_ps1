@@ -11,3 +11,9 @@ results/bench_audit/
 .pytest_cache/
 .claude/settings.local.json
 traces/rejected/
+
+# Real-service credentials (never commit)
+secrets/
+credentials.json
+token.json
+*_token.json
