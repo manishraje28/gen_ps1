@@ -99,3 +99,18 @@ body.dash { --rail: 340px; --top: 68px; }
   .dash .nav { top: 0; height: 100vh; background: #F7F4EE; }
   .dash .search kbd { display: none; }
 }
+
+/* v5: no top search, brand logos, slimmer stat cards (closer to the reference) */
+.dash .top-right { grid-column: 3; }
+svg.logo { width: 22px; height: 22px; }
+.tool-ic svg.logo { width: 18px; height: 18px; }
+.rapp .app-ico svg.logo { width: 26px; height: 26px; }
+.dash .stats { gap: 12px; }
+.dash .stat2 { grid-template-columns: 36px minmax(0, 1fr) 14px; padding: 14px 14px 13px 16px; row-gap: 0; min-height: 0; }
+.dash .stat2 > span:first-child { grid-row: 1 / span 3; padding-top: 2px; }
+.dash .stat2 > span:first-child svg.logo { width: 26px; height: 26px; }
+.dash .stat2 .n { font-size: 22px; line-height: 1.15; font-weight: 650; }
+.dash .stat2 .l { font-size: 13.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash .stat2 .go { font-size: 13px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash .stat2 .chev svg { width: 14px; height: 14px; }
+.dash .stat2:hover { transform: none; border-color: var(--ink-3); box-shadow: none; }

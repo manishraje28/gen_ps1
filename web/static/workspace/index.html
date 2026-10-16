@@ -8,18 +8,13 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/workspace/ws.css?v=5">
   <link rel="stylesheet" href="/static/workspace/shell.css?v=5">
-  <link rel="stylesheet" href="/static/workspace/dash.css?v=1">
+  <link rel="stylesheet" href="/static/workspace/dash.css?v=3">
 </head>
 <body class="shell dash">
 <!-- ============ top bar (full width) ============ -->
 <header class="topbar">
   <button class="iconbtn menu-btn" id="menuBtn" type="button" aria-label="Menu"><svg><use href="/static/workspace/sprite.svg#tasks"/></svg></button>
   <a class="brand" href="#/home"><span class="brand-box"><svg><use href="/static/workspace/sprite.svg#shield"/></svg></span><span>WARRANT <em>Workspace</em></span></a>
-  <form class="search" id="searchForm" autocomplete="off" role="search">
-    <svg><use href="/static/workspace/sprite.svg#search"/></svg>
-    <input id="searchInput" placeholder="Search anything, or ask WARRANT to do something…" aria-label="Ask WARRANT">
-    <kbd>⌘ K</kbd>
-  </form>
   <div class="top-right">
     <button class="iconbtn bell" id="bellBtn" type="button" aria-label="Waiting for your approval"><svg><use href="/static/workspace/sprite.svg#bell"/></svg><i id="bellDot" hidden></i></button>
     <div class="menu">
@@ -97,6 +92,6 @@
 
 <div class="toast" id="toast" hidden></div>
 <script src="/static/workspace/flows.js?v=1"></script>
-<script src="/static/workspace/app.js?v=6"></script>
+<script src="/static/workspace/app.js?v=8"></script>
 </body>
 </html>
