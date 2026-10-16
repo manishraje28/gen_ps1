@@ -30,8 +30,8 @@
   "benign_utility_counting_asked_user": 1.0,
   "utility_executed_benign": 1.0,
   "tokens": 0,
-  "seconds": 111.5,
-  "date": "2026-10-16 14:19",
+  "seconds": 121.2,
+  "date": "2026-10-16 16:27",
   "per_run": [
     {
       "user_task": "user_task_0",
