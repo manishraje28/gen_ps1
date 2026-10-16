@@ -20,6 +20,13 @@ from web.server import app  # noqa: E402
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _simulated_gmail(monkeypatch):
+    """These tests cover the simulated workspace; keep them independent of real Gmail credentials on the machine."""
+    from integrations import gmail
+    monkeypatch.setattr(gmail, "available", lambda: False)
+
+
 def _sid() -> str:
     return client.post("/api/play/session").json()["sid"]
 

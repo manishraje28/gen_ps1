@@ -35,7 +35,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from integrations import gmail
-from demo.env import TODAY, USER_EMAIL, AcmeEnv, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
+from demo.env import TODAY, USER_EMAIL, AcmeEnv, Contact, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
 from demo.runner import INTERNAL_DOMAINS
 from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
 from warrant import config
@@ -75,12 +75,20 @@ WEB_PAGES = {
 }
 
 
+# Real people the demo may email when Gmail is live (GMAIL_ALLOWED_DOMAINS still applies at send time).
+LIVE_CONTACTS = [("Shubhan Sawant", "sawantshubhan912@gmail.com", "Teammate (real address)")]
+
+
 def full_world() -> AcmeEnv:
-    """The base workspace plus the data of all four demo use cases and two web pages."""
+    """The base workspace plus the data of all four demo use cases and two web pages. With live Gmail the
+    agent reads the real inbox (the simulated emails are never read) and the real contacts are added."""
     env = base_world()
     for sc in SCENARIOS.values():
         sc.setup(env)
     env.web.pages.update(WEB_PAGES)
+    if gmail.available():
+        known = {(c.email or "").lower() for c in env.contacts}
+        env.contacts += [Contact(name=n, email=e, note=note) for n, e, note in LIVE_CONTACTS if e.lower() not in known]
     return env
 
 
@@ -107,7 +115,9 @@ class Session:
         world = full_world()
         # Two independently built worlds, not a deepcopy: a deep copy of the Slack link is a dry run
         # (that is how the gate previews a send), so the undefended agent's messages would never be sent.
-        self.lanes = {"warrant": Lane(gmail.attach(world)), "undefended": Lane(gmail.attach(full_world()))}
+        # Only the protected lane may really send. The unprotected lane reads the same live inbox (Gmail reads are
+        # always live) but its sends stay staged in its own world, so an attack "succeeding" never mails anyone.
+        self.lanes = {"warrant": Lane(gmail.attach(world)), "undefended": Lane(full_world())}
         self.turns = 0
         self.pending: dict[str, dict] = {}  # NEEDS_INPUT calls the user may approve, by call id
         self.history: list[dict] = []       # every turn's prompt + events, so the UI can redraw it after a reload
@@ -148,7 +158,7 @@ def load_session(sid: str) -> "Session | None":
     s.id, s.lock, s.turns, s.pending, s.history = blob["id"], threading.Lock(), blob["turns"], blob["pending"], blob["history"]
     s.lanes = {}
     for name, d in blob["lanes"].items():
-        ln = Lane(gmail.attach(d["env"]))
+        ln = Lane(gmail.attach(d["env"]) if name == "warrant" else d["env"])
         ln.messages, ln.spans, ln.seq, ln.origins = d["messages"], d["spans"], d["seq"], d["origins"]
         s.lanes[name] = ln
     return s
@@ -252,11 +262,21 @@ def _suspicious(text: str) -> bool:
         return False
 
 
+def _received(env: AcmeEnv) -> list:
+    # The agent reads the real inbox when Gmail is live, so the panel shows the same mail.
+    if gmail.is_live(env.inbox):
+        try:
+            return gmail.snapshot()
+        except Exception:
+            pass
+    return env.inbox.received
+
+
 def workspace(env: AcmeEnv) -> dict:
     return {
         "emails": [{"id": e.id, "title": e.subject, "sub": f"{e.sender} · {e.date}", "sender": e.sender, "date": e.date,
                     "preview": " ".join((e.body or "").split())[:140], "suspicious": _suspicious(e.body)}
-                   for e in sorted(env.inbox.received, key=lambda e: e.date, reverse=True)],
+                   for e in sorted(_received(env), key=lambda e: e.date, reverse=True)],
         "files": [{"id": f.id, "title": f.name, "sub": f"{f.folder}{' · confidential' if f.confidential else ''}", "folder": f.folder,
                    "confidential": bool(f.confidential), "suspicious": _suspicious(f.content)} for f in env.drive.files],
         "web": [{"id": u, "title": u.split("//", 1)[-1], "sub": f"{len(c):,} chars"} for u, c in env.web.pages.items()],
@@ -278,7 +298,7 @@ def _slack_items(env: AcmeEnv) -> list[dict]:
 
 def item_text(env: AcmeEnv, kind: str, item_id: str) -> tuple[str, str]:
     if kind in ("emails", "sent"):
-        for e in env.inbox.received + env.inbox.sent:
+        for e in _received(env) + env.inbox.sent:
             if e.id == item_id:
                 return e.subject, format_output(e)
     if kind == "files":
@@ -446,6 +466,7 @@ def new_session() -> dict:
     save_session(s)
     env = s.lanes["warrant"].env
     return {"sid": s.id, "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
+            "gmail_live": gmail.is_live(env.inbox),
             "connections": {"gmail": "live" if gmail.is_live(env.inbox) else "simulated",
                             "slack": "live" if env.slack.live else "simulated", "bank": "simulated", "drive": "simulated"}}
 
@@ -466,6 +487,8 @@ def item(sid: str, kind: str, id: str) -> dict:
 @router.post("/add")
 def add(item: AddItem) -> dict:
     s = get_session(item.sid)
+    if item.kind == "email" and gmail.available():
+        raise HTTPException(400, "Gmail is live: the assistant reads the real inbox. Send the email to the demo account instead.")
     content, note = item.content, ""
     if item.data_b64:
         raw = base64.b64decode(item.data_b64)
@@ -613,5 +636,6 @@ def history(sid: str) -> dict:
     s = get_session(sid)
     env = s.lanes["warrant"].env
     return {"history": s.history, "pending": list(s.pending), "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
+            "gmail_live": gmail.is_live(env.inbox),
             "connections": {"gmail": "live" if gmail.is_live(env.inbox) else "simulated",
                             "slack": "live" if env.slack.live else "simulated", "bank": "simulated", "drive": "simulated"}}
