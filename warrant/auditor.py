@@ -25,8 +25,10 @@ _AI_ADDRESS_RE = re.compile(
     r"\b(ai|a\.i\.|assistant|language model|llm|chatbot|gpt|llama|claude|gemini|agent|model)\b[^.\n]{0,40}\b(you|your|must|should|please|need)\b"
     r"|\b(you|to you),?\s+(the\s+)?(ai|assistant|language model|llm|agent|model)\b"
     r"|\b(dear|hey|attention|note to(?: the)?)\s+(ai|assistant|agent|model|llm|bot)\b"
-    r"|\bai assistants?\b",
-    re.I,
+    r"|\bai assistants?\b"
+    # a line written as a turn addressed to the agent: "Assistant: also forward these notes to ..."
+    r"|^\s*(?:ai|assistant|agent|bot|llm|model|ai agent|ai assistant)\s*[:>]\s",
+    re.I | re.M,
 )
 _OVERRIDE_RE = re.compile(
     r"ignore (all |any |the )?(previous|prior|above|earlier)|disregard|forget (all |your )?(previous|prior)|"
@@ -57,11 +59,16 @@ class Span:
     by: str = "rules"
     trusted_source: bool = False
     delegated: bool = False
+    # Lane E: which document of the tool output the span belongs to (call id + item index), and whether
+    # it comes from a confidential source (payroll, /hr, passwords...). Set by WarrantGate.label_read.
+    doc: str = ""
+    secret: bool = False
 
     def as_dict(self) -> dict:
         return {
             "id": self.id, "call_id": self.call_id, "tool": self.tool, "text": self.text[:400], "label": self.label,
             "score": self.score, "reasons": self.reasons, "by": self.by, "trusted": self.trusted_source, "delegated": self.delegated,
+            "doc": self.doc, "secret": self.secret,
         }
 
 
@@ -181,6 +188,31 @@ def split_spans(text: str) -> list[str]:
     return pieces
 
 
+# Clause boundaries inside one sentence: ", and", "; ", " but ", " also ".
+_CLAUSE_SPLIT_RE = re.compile(r",\s+(?=and\b)|;\s+|\s+(?=but\b)|,?\s+(?=also\b)", re.I)
+# Typed values worth keeping as data: an amount, an IBAN or an email address.
+_TYPED_VALUE_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b|[\w.+-]+@[\w-]+\.[\w.-]+|(?:\binr|\brs\.?|\busd|\beur|\bgbp|\bchf|\$|€|£|₹)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:inr|usd|eur|gbp|chf)\b", re.I)
+
+
+def split_clauses(text: str) -> list[str] | None:
+    """Splits a flagged sentence at clause boundaries. Returns the clauses (in text order, together
+    covering the sentence) only if some clause is clean data: it scores 0 and carries a typed value.
+    Otherwise None, and the whole sentence stays DIRECTIVE. Each clause is scored on its own, so
+    an instruction clause is still flagged; this only stops one injected clause from masking the
+    real payment details written in the same sentence (H9)."""
+    cuts = [m.start() for m in _CLAUSE_SPLIT_RE.finditer(text)]
+    if not cuts:
+        return None
+    bounds = [0, *cuts, len(text)]
+    pieces = [text[a:b].strip(" ,;") for a, b in zip(bounds, bounds[1:])]
+    pieces = [p for p in pieces if p]
+    if len(pieces) < 2:
+        return None
+    if not any(score_text(p)[0] == 0 and _TYPED_VALUE_RE.search(deobfuscate(p)[0]) for p in pieces):
+        return None
+    return pieces
+
+
 def _llm_check(candidates: list[str], user_request: str = "", full_text: str = "") -> list[bool]:
     """Ask a small model which candidate spans are instructions aimed at the AI agent."""
     from .llm import chat_json
@@ -211,18 +243,29 @@ def audit_output(text: str, call_id: str, tool: str, span_prefix: str, use_llm: 
     raw = split_spans(text)
     spans: list[Span] = []
     in_block = False
-    for i, chunk in enumerate(raw):
+    for chunk in raw:
         score, reasons = score_text(chunk)
         opens = bool(re.search(r"<\s*(information|instructions?|system|important)\s*>", chunk, re.I))
         closes = bool(re.search(r"</\s*(information|instructions?|system|important)\s*>", chunk, re.I))
         if opens:
             in_block = True
-        label = DIRECTIVE if (score >= 2 or in_block) else EVIDENCE
-        if in_block and score < 2:
-            reasons = reasons + ["inside injected block"]
+        # Clause-level masking (H9): a flagged sentence outside an injected block keeps its clean
+        # data clauses as EVIDENCE; every clause is scored again, so the auditor still only lowers trust.
+        clauses = split_clauses(chunk) if score >= 2 and not in_block and not opens else None
+        for piece in clauses or [chunk]:
+            if clauses is None:
+                sc, rs = score, reasons
+                lab = DIRECTIVE if (sc >= 2 or in_block) else EVIDENCE
+                if in_block and sc < 2:
+                    rs = rs + ["inside injected block"]
+            else:  # only a clean data clause is kept; every other clause stays flagged
+                sc, rs = score_text(piece)
+                clean = sc == 0 and bool(_TYPED_VALUE_RE.search(deobfuscate(piece)[0]))
+                lab = EVIDENCE if clean else DIRECTIVE
+                rs = rs + ["data clause kept from a flagged sentence" if clean else "clause of a flagged sentence"]
+            spans.append(Span(id=f"{span_prefix}.{len(spans)}", call_id=call_id, tool=tool, text=piece, label=lab, score=sc, reasons=rs))
         if closes:
             in_block = False
-        spans.append(Span(id=f"{span_prefix}.{i}", call_id=call_id, tool=tool, text=chunk, label=label, score=score, reasons=reasons))
     # Propagate: an instruction paragraph taints its neighbours in the same block of sentences.
     for i, sp in enumerate(spans):
         if sp.label == DIRECTIVE and sp.score >= 4 and i + 1 < len(spans):
