@@ -178,7 +178,7 @@ def empty_ground_truth_injections(suite) -> list[str]:
     return [iid for iid, it in suite.injection_tasks.items() if not list(it.ground_truth(env))]
 
 
-def run_pair(suite, pipe, user_task, injection_task, injections: dict) -> dict:
+def run_pair(suite, pipe, user_task, injection_task, injections: dict, keep_messages: bool = False) -> dict:
     """Mirror of TaskSuite.run_task_with_pipeline that scores twice: the official AgentDojo way
     (every proposed call) and on executed calls only. Official scores are identical to AgentDojo's."""
     environment = suite.load_and_inject_default_environment(injections)
@@ -204,6 +204,9 @@ def run_pair(suite, pipe, user_task, injection_task, injections: dict) -> dict:
     if injection_task is not None:
         res["attack"] = suite._check_task_result(injection_task, output, pre_env, task_env, proposed)
         res["attack_executed"] = suite._check_task_result(injection_task, output, pre_env, task_env, executed)
+    if keep_messages:
+        res["messages"] = messages
+        res["answer"] = content_to_text(output)
     return res
 
 
