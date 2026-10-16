@@ -91,6 +91,7 @@
   /* ---------------- chrome ---------------- */
   const SVC = [["gmail", "Gmail", "envelope"], ["slack", "Slack", "hash"], ["bank", "Bank", "wallet"], ["drive", "Drive", "folder"]];
   function renderChips() {
+    if (!$("#conns")) return;
     $("#conns").innerHTML = SVC.map(([k, l, ic]) => `<span class="chip ${S.conns[k] === "live" ? "live" : ""}" title="${S.conns[k] === "live" ? "Connected to the real service" : "Demo workspace: add credentials in .env to go live"}"><span class="svc-${k}">${icon(ic)}</span><b>${l}</b><i></i>${S.conns[k] === "live" ? "live" : "demo"}</span>`).join("");
   }
   function pendingCount() { return S.tasks.reduce((n, T) => n + T.pending.size, 0); }
@@ -123,36 +124,23 @@
     const w = S.world || {};
     const h = new Date().getHours(), part = h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";
     const accts = { gmail: "arjun@acme.test", slack: "warrant-demo workspace", bank: "IN07 ACME 0000 5521 90", drive: `${(w.files || []).length} files` };
-    const recent = S.tasks.slice().reverse().slice(0, 5);
+    const recent = S.tasks.slice().reverse().slice(0, 6);
     const flagged = (w.emails || []).filter((e) => e.suspicious);
     P.innerHTML = `
-      <div class="home-top">
-        <div><p class="greet">Good ${part}, Arjun</p><h1>Your personal AI workspace.</h1>
-          <p class="lede">WARRANT reads your mail, Slack, bank and drive and gets things done. It acts only on what <b>you</b> authorised, never on instructions hidden in what it reads.</p></div>
-        <div class="card apps-card"><div class="card-h"><h2>Connected apps</h2><a class="link" href="#/apps">${icon("sliders")}</a></div>
-          ${SVC.map(([k, l, ic]) => `<div class="row"><span class="app-ico svc-${k}">${icon(ic)}</span><div><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(accts[k])}${S.conns[k] === "live" ? "" : " (demo)"}</span></div><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : "Demo"}</span></div>`).join("")}
-        </div>
-      </div>
+      <div class="home-top"><div><p class="greet">Good ${part}, Arjun</p><h1>Your personal AI workspace.</h1>
+        <p class="lede">WARRANT reads your mail, Slack, bank and drive and gets things done. It acts only on what <b>you</b> authorised, never on instructions hidden in what it reads. Ask in the chat on the right.</p></div></div>
+      <div class="apps-grid">${SVC.map(([k, l, ic]) => `<a class="card app-card" href="#/${k === "gmail" ? "inbox" : k}"><span class="app-ico svc-${k}">${icon(ic)}</span><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(accts[k])}</span><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : "Demo"}</span></a>`).join("")}</div>
       <div class="stats">
         ${stat("envelope", "svc-gmail", (w.emails || []).length, "Emails in your inbox", flagged.length ? `${flagged.length} with hidden instructions` : "Summarise", flagged.length ? "#/inbox/attention" : "do:inbox")}
         ${stat("hash", "svc-slack", (w.slack || []).length, "Slack channels", "View", "#/slack")}
         ${stat("calendar", "svc-bank", (w.calendar || []).length, "Upcoming events", "View", "#/calendar")}
         ${stat("file", "svc-drive", (w.files || []).length, "Files in your drive", "View", "#/drive")}
       </div>
-      <div class="home-bottom">
-        <div class="card"><div class="card-h"><h2>Recent activity</h2><a class="link" href="#/tasks">View all ${icon("arrow")}</a></div>
-          <ul class="acts">${recent.length ? recent.map(actRow).join("") : flagged.map((e) => `<li class="act" data-mail="${esc(e.id)}"><span class="ico2 ask">${icon("note")}</span><div class="t"><b>${esc(e.title)}</b><span>${esc(e.sender)} · contains instructions aimed at an AI</span></div><time>${esc(e.date)}</time><span class="pill2 ask">Hidden instructions</span></li>`).join("") || `<li class="empty-note">No tasks yet. Ask WARRANT to do something.</li>`}</ul></div>
-        <div class="card need"><div class="need-h"><span class="app-ico">${icon("spark")}</span><div><b>Need something done?</b><span>Ask or choose a task below.</span></div></div>
-          <div class="quick">${DAILY.slice(0, 5).map((f, i) => `<button type="button" data-d="${i}">${icon(f.icon)}${esc(f.title)}</button>`).join("")}
-            <button type="button" data-lab="1">${icon("bolt")}Try an attack</button>
-            <button type="button" class="typed" data-new="1"><span>Or just type your request…</span>${icon("arrow")}</button></div></div>
-      </div>`;
-    $$(".stat2", P).forEach((b) => b.onclick = () => { const go = b.dataset.go; if (go === "do:inbox") startTask(DAILY[4].q); else location.hash = go; });
+      <div class="card"><div class="card-h"><h2>Recent activity</h2><a class="link" href="#/tasks">View all ${icon("arrow")}</a></div>
+        <ul class="acts">${recent.length ? recent.map(actRow).join("") : flagged.map((e) => `<li class="act" data-mail="${esc(e.id)}"><span class="ico2 ask">${icon("note")}</span><div class="t"><b>${esc(e.title)}</b><span>${esc(e.sender)} · contains instructions aimed at an AI</span></div><time>${esc(e.date)}</time><span class="pill2 ask">Hidden instructions</span></li>`).join("") || `<li class="empty-note">No tasks yet. Ask WARRANT in the chat.</li>`}</ul></div>`;
+    $$(".stat2", P).forEach((b) => b.onclick = () => { const go = b.dataset.go; if (go === "do:inbox") startTask(DAILY.find((d) => d.icon === "inbox").q); else location.hash = go; });
     $$(".act[data-task]", P).forEach((r) => r.onclick = () => location.hash = `#/task/${r.dataset.task}`);
     $$(".act[data-mail]", P).forEach((r) => r.onclick = () => openItem("emails", r.dataset.mail));
-    $$(".quick [data-d]", P).forEach((b) => b.onclick = () => openNewTask(DAILY[+b.dataset.d]));
-    $(".quick [data-lab]", P).onclick = () => location.hash = "#/lab";
-    $(".quick [data-new]", P).onclick = () => openNewTask();
   }
   function stat(ic, cls, n, label, go, href) { return `<button type="button" class="card stat2" data-go="${href}"><span class="${cls}">${icon(ic)}</span><span class="n">${n}</span><span class="l">${esc(label)}</span><span class="go">${esc(go)}</span></button>`; }
   function taskStatus(T) {
@@ -223,6 +211,7 @@
     P.innerHTML = `<a class="crumb" href="#/tasks">${icon("back")}Tasks</a>
       <div class="task-h"><h1>${esc(T.prompt)}</h1><span class="pill2 ${cls}" id="tStatus">${esc(label)}</span></div>
       <div class="task-sub">${new Date(T.ts).toLocaleString()} · ${T.compare ? "compared with an unprotected assistant" : "WARRANT only"}</div>
+      ${T.done ? "" : `<div class="task-run" id="tRun"><i></i></div>`}
       <div class="card"><div class="tabs">${[["plan", "Plan"], ["progress", "Progress"], ["results", "Results"]].map(([k, l]) => `<button class="tab2 ${T.tab === k ? "on" : ""}" data-tab="${k}" type="button">${l}</button>`).join("")}</div>
       <div class="task-body" id="tBody"></div></div>`;
     $$(".tab2[data-tab]", P).forEach((b) => b.onclick = () => { T.tab = b.dataset.tab; pageTask(P, arg); });
@@ -233,6 +222,7 @@
     const body = $("#tBody");
     if (!body || S.viewing !== T || route().page !== "task") return;
     const st = $("#tStatus"); if (st) { const [c, l] = taskStatus(T); st.className = `pill2 ${c}`; st.textContent = l; }
+    if (T.done) $("#tRun")?.remove();
     if (T.tab === "progress") { if (T.el.parentNode !== body) { body.innerHTML = ""; body.appendChild(T.el); } return; }
     if (T.tab === "plan") {
       const all = ["READ", "WRITE", "EGRESS", "PAY", "BOOK", "DELETE", "ACCOUNT"];
@@ -298,14 +288,16 @@
   function suggRow(f, set, i) {
     return `<button class="sg" type="button" data-set="${set}" data-i="${i}"><span class="ico2">${icon(f.icon)}</span><div><b>${esc(f.title)}</b><span class="muted">${esc(f.text)}</span></div><span class="tag ${f.tag}">${f.tag === "safe" ? "everyday" : f.tag === "gap" ? "known gap" : "attack"}</span></button>`;
   }
-  function openNewTask(flow) {
-    $("#ntDaily").innerHTML = DAILY.map((f, i) => suggRow(f, "d", i)).join("");
+  function renderQuick() {
+    $("#ntDaily").innerHTML = DAILY.map((f, i) => `<button type="button" data-i="${i}">${icon(f.icon)}${esc(f.title)}</button>`).join("");
+    $$("#ntDaily button").forEach((b) => b.onclick = () => pickFlow(DAILY[+b.dataset.i]));
     $("#ntAttack").innerHTML = ATTACKS.map((f, i) => suggRow(f, "a", i)).join("");
-    $$("#newTask .sg").forEach((b) => b.onclick = () => pickFlow((b.dataset.set === "d" ? DAILY : ATTACKS)[+b.dataset.i]));
-    $("#newTask").hidden = false;
+    $$("#ntAttack .sg").forEach((b) => b.onclick = () => { $(".qa-attacks").open = false; pickFlow(ATTACKS[+b.dataset.i]); });
+  }
+  function openNewTask(flow) {
     $("#ntNote").textContent = "";
-    if (flow) pickFlow(flow); else { $("#ntText").value = ""; S.force = null; }
-    setTimeout(() => $("#ntText").focus(), 50);
+    if (flow) pickFlow(flow); else S.force = null;
+    setTimeout(() => $("#ntText").focus(), 30);
   }
   async function pickFlow(f) {
     if (f.plant) {
@@ -337,7 +329,7 @@
     return `<div class="lane ${W ? "safe" : "plain"}" data-lane="${lane}"><div class="lane-head"><h3>${W ? "With WARRANT" : "Unprotected assistant"}</h3><span class="pill work">working</span></div><div class="steps"></div><div class="tail"></div></div>`;
   }
   const laneEl = (T, lane) => $(`.lane[data-lane="${lane}"]`, T.el);
-  function touch(T) { paintTaskBody(T); if (route().page === "tasks" || route().page === "home") render(); else renderNav(); }
+  function touch(T) { paintTaskBody(T); renderChat(); if (route().page === "tasks" || route().page === "home") render(); else renderNav(); }
 
   async function startTask(text) {
     text = (text || "").trim();
@@ -348,7 +340,7 @@
     const mask = gullible ? false : $("#optMask").checked;
     const force = gullible && S.force && S.forceQ === text ? S.force : null;
     S.force = null; S.busy = true; $("#ntSend").disabled = true;
-    $("#newTask").hidden = true;
+    $("#ntText").value = ""; $("#ntNote").textContent = "";
     const T = newTask(text, compare);
     T.tab = "progress";
     location.hash = `#/task/${T.id}`;
@@ -377,6 +369,24 @@
       S.busy = false; $("#ntSend").disabled = false;
       refreshWorld();
     }
+  }
+  function renderChat() {
+    const log = $("#chatLog");
+    const busy = S.tasks.some((T) => !T.done);
+    $("#chatState").textContent = busy ? "Working…" : pendingCount() ? "Waiting for your approval" : "Ready";
+    $("#chatState").className = `muted small ${busy ? "run" : ""}`;
+    const hello = `<div class="chat-hello"><b>Hi Arjun, what should I do?</b>I can read your mail, Slack, bank and drive, and send, pay, share or book for you. Anything that leaves your workspace passes the WARRANT checkpoint first.</div>`;
+    log.innerHTML = hello + S.tasks.map((T) => {
+      const [cls, label] = taskStatus(T);
+      const last = T.plan.slice().reverse().find((st) => st.title) || null;
+      const body = !T.done
+        ? `<div class="step"><span class="typing"><i></i><i></i><i></i></span>${esc(last ? last.title : "Planning…")}</div>`
+        : (T.finals.warrant ? `<div class="reply">${esc(T.finals.warrant)}</div>` : "");
+      return `<div class="msg me">${esc(T.prompt)}</div>
+        <div class="msg bot ${cls === "ask" || cls === "shield" ? "warn" : ""}"><div class="row1"><span class="pill2 ${cls}">${esc(label)}</span>${T.done ? `<span class="muted small">${esc(taskSummary(T))}</span>` : ""}</div>${body}
+        <a class="open" href="#/task/${T.id}">${T.pending.size ? "Review and approve" : "Open task"}${icon("arrow")}</a></div>`;
+    }).join("");
+    log.scrollTop = log.scrollHeight;
   }
   function addStep(T, st, title, sub) { const s = { st, title, sub, t: Date.now() }; T.plan.push(s); return s; }
   function logLine(T, cls, what, why) { T.log.unshift({ cls, what, why, t: Date.now() }); }
@@ -674,13 +684,12 @@
 
   /* ---------------- wiring ---------------- */
   function wire() {
-    const close = () => { $("#newTask").hidden = true; };
-    $("#ntClose").onclick = close; $("#ntBack").onclick = close;
-    $("#newTask").onclick = (e) => { if (e.target.id === "newTask") close(); };
+    const close = () => {};
     $("#ntForm").onsubmit = (e) => { e.preventDefault(); startTask($("#ntText").value); };
     $("#ntText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) { e.preventDefault(); $("#ntForm").requestSubmit(); } });
     $("#ntAdd").onclick = () => openPlant("email");
     $("#searchBtn").onclick = () => openNewTask();
+    renderQuick();
     document.addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openNewTask(); }
       if (e.key === "Escape") { close(); $("#reader").hidden = true; $("#plant").hidden = true; $("#setPop").hidden = true; }
@@ -713,6 +722,6 @@
   wire();
   const saved = store.get();
   (saved ? restoreSession(saved).catch(() => newSession()) : newSession())
-    .then(render)
+    .then(() => { render(); renderChat(); })
     .catch((e) => { $("#page").innerHTML = `<div class="err">Could not start: ${esc(e.message)}</div>`; });
 })();

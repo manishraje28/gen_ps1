@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/workspace/ws.css?v=5">
-  <link rel="stylesheet" href="/static/workspace/shell.css?v=2">
+  <link rel="stylesheet" href="/static/workspace/shell.css?v=4">
 </head>
 <body class="shell">
 <div class="frame">
@@ -29,7 +29,6 @@
     <!-- ============ top bar ============ -->
     <header class="topbar">
       <button class="iconbtn menu-btn" id="menuBtn" type="button" aria-label="Menu"><svg><use href="/static/workspace/sprite.svg#tasks"/></svg></button>
-      <div class="chips" id="conns"></div>
       <div class="top-right">
         <button class="search" id="searchBtn" type="button"><svg><use href="/static/workspace/sprite.svg#search"/></svg><span>Ask WARRANT…</span><kbd>⌘K</kbd></button>
         <button class="iconbtn bell" id="bellBtn" type="button" aria-label="Waiting for your approval"><svg><use href="/static/workspace/sprite.svg#bell"/></svg><i id="bellDot" hidden></i></button>
@@ -50,32 +49,25 @@
 
     <main class="page" id="page"></main>
   </div>
-</div>
 
-<!-- ============ new task slide-over ============ -->
-<div class="over" id="newTask" hidden>
-  <section class="panel" role="dialog" aria-labelledby="ntTitle">
-    <div class="panel-head"><button class="quiet" id="ntBack" type="button"><svg><use href="/static/workspace/sprite.svg#back"/></svg>New task</button><button class="iconbtn ghost" id="ntClose" type="button" aria-label="Close"><svg><use href="/static/workspace/sprite.svg#close"/></svg></button></div>
-    <h2 id="ntTitle">Tell WARRANT what to do.</h2>
-    <p class="muted">Ask in plain language. The assistant plans, reads what it needs and acts. Every email, payment, share or message passes WARRANT's checkpoint first, and anything new waits for your approval.</p>
+  <!-- ============ assistant chat (always visible) ============ -->
+  <aside class="chat" id="newTask" aria-label="Assistant">
+    <div class="chat-head"><span class="chat-av"><svg><use href="/static/workspace/sprite.svg#shield"/></svg></span><div><b>WARRANT assistant</b><span class="muted small" id="chatState">Ready</span></div></div>
+    <div class="chat-log" id="chatLog"></div>
+    <div class="chat-quick">
+      <div class="qa" id="ntDaily"></div>
+      <details class="qa-attacks"><summary><svg><use href="/static/workspace/sprite.svg#bolt"/></svg>Try an attack</summary><div class="sugg" id="ntAttack"></div></details>
+    </div>
     <form class="compose" id="ntForm" autocomplete="off">
-      <textarea id="ntText" rows="5" placeholder="e.g. Pay the electricity bill in bill-oct-2026.txt"></textarea>
+      <textarea id="ntText" rows="2" placeholder="Ask WARRANT to do something…"></textarea>
       <div class="compose-bar">
-        <span class="src-chip"><svg><use href="/static/workspace/sprite.svg#envelope"/></svg>Gmail</span>
-        <span class="src-chip"><svg><use href="/static/workspace/sprite.svg#hash"/></svg>Slack</span>
-        <span class="src-chip"><svg><use href="/static/workspace/sprite.svg#folder"/></svg>Drive</span>
-        <span class="src-chip"><svg><use href="/static/workspace/sprite.svg#wallet"/></svg>Bank</span>
         <button class="iconbtn ghost sq" id="ntAdd" type="button" title="Add data (email, file or web page)"><svg><use href="/static/workspace/sprite.svg#plus"/></svg></button>
-        <span class="grow"></span>
         <span class="muted small" id="ntNote"></span>
-        <button class="send" id="ntSend" type="submit" aria-label="Start task"><svg><use href="/static/workspace/sprite.svg#send"/></svg></button>
+        <span class="grow"></span>
+        <button class="send" id="ntSend" type="submit" aria-label="Send"><svg><use href="/static/workspace/sprite.svg#send"/></svg></button>
       </div>
     </form>
-    <h3 class="sub-h">Suggested tasks</h3>
-    <div class="sugg" id="ntDaily"></div>
-    <h3 class="sub-h">Try an attack <span class="muted small">poisoned data is planted first</span></h3>
-    <div class="sugg" id="ntAttack"></div>
-  </section>
+  </aside>
 </div>
 
 <!-- reader -->
@@ -106,6 +98,6 @@
 
 <div class="toast" id="toast" hidden></div>
 <script src="/static/workspace/flows.js?v=1"></script>
-<script src="/static/workspace/app.js?v=2"></script>
+<script src="/static/workspace/app.js?v=4"></script>
 </body>
 </html>
