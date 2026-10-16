@@ -80,6 +80,12 @@ function plainGateReason(g) {
   if (/UNKNOWN|unknown tool/i.test(r + c)) return "Unknown kind of action, held to be safe";
   return r ? r.charAt(0).toUpperCase() + r.slice(1).replace(/_/g, " ") : "No authorisation found";
 }
+// which model plans live turns: the local Ollama model, or Groq with the local one as fallback
+function liveModelName() {
+  const local = CONFIG.planner_provider === "local" || !CONFIG.groq_key;
+  if (local) return CONFIG.local_fallback ? `Local model ${CONFIG.local_model} (Ollama)` : "Local model not running";
+  return `Groq ${CONFIG.planner_model}${CONFIG.local_fallback ? `, falls back to ${CONFIG.local_model}` : ""}`;
+}
 function fileName(id) { return RUN?.files[id] || id; }
 
 /* ---------------------------------------------------------------- boot */
@@ -92,9 +98,10 @@ async function boot() {
     $("#shipments").innerHTML = `<p class="muted" style="padding:20px">Couldn’t reach the demo server. Start it with run_demo.bat and reload.</p>`;
     return;
   }
+  $("#groqHint").textContent = liveModelName();
   if (!CONFIG.has_key) {
     const g = $("#groqOpt"); g.classList.add("disabled"); g.querySelector("input").disabled = true;
-    $("#groqHint").textContent = "Needs a GROQ_API_KEY in .env";
+    $("#groqHint").textContent = "Needs a Groq key in .env, or Ollama running";
   }
   renderShipments();
   $("#backBtn").onclick = () => { location.hash = ""; };

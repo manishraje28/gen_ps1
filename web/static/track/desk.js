@@ -45,7 +45,7 @@ async function openDesk() {
   for (const L of Object.values(RUN.lanes)) L.el.querySelector("[data-parcels]").innerHTML = `<p class="muted" style="padding:18px 0;margin:0">Nothing sent yet.</p>`;
   wireDesk();
   if (!CONFIG.has_key) {
-    warn("The live assistant needs a Groq key. Add GROQ_API_KEY=... to .env and restart the server. The scenarios on the home page still work offline.");
+    warn("The live assistant needs a model: start Ollama (ollama serve) with " + (CONFIG.local_model || "qwen2.5:7b") + " pulled, or add a Groq key to .env, then restart the server. The scenarios on the home page still work offline.");
     $("#sendBtn").disabled = true;
   }
   try {
@@ -160,7 +160,7 @@ async function send() {
   const names = compare ? ["undefended", "warrant"] : ["warrant"];
   DESK.busy = true; DESK.turn += 1;
   $("#sendBtn").disabled = true; $("#msg").disabled = true;
-  warn(""); setState("Working… a live model can take 10–60 s");
+  warn(""); setState(`Working on ${liveModelName()}… this can take a minute or two`);
   // per-turn state; parcels of earlier turns stay on the cards
   Object.assign(RUN, { s: { ...RUN.s, query: msg }, done: new Set(), verdicts: {}, gates: [], noteShown: false, expect: names.length, turnEffects: {} });
   setLanes(names);
