@@ -62,4 +62,14 @@ Live latency per probe is about 2-3 planner calls' worth. To be measured by Lane
   without it every probed call becomes `PROBE_INCONCLUSIVE`.
 
 ## Benchmark (oracle) with WARRANT_PERTURB=0 vs main
-Run in progress; the hook is inert when the flag is off.
+Identical to `main` (the hook is inert when the flag is off):
+
+| Suite | ASR | Benign utility | Utility under attack |
+|---|---|---|---|
+| banking | 0% | 100% | 94% |
+| slack | 20% (AgentDojo IT5 attempted-call scoring) | 100% | 76% |
+| travel | 0.7% | 100% | 97% |
+| workspace | 0% | 100% | 100% |
+
+With `WARRANT_PERTURB=1` the oracle bench needs the planner passed through (Lane F's PlannerHandle); until
+then every probed call is `PROBE_INCONCLUSIVE`, so no `=1` benchmark numbers are reported yet.
