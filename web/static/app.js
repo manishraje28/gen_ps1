@@ -446,7 +446,14 @@ function agg(rows, def, key, weight) {
   const w = rs.reduce((a, r) => a + r[weight], 0);
   return w ? rs.reduce((a, r) => a + r[key] * r[weight], 0) / w : null;
 }
-const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
+const pct = (x) => (x == null ? "–" : x > 0 && x < 0.01 ? "<1%" : `${Math.round(x * 100)}%`);
+/* Rate over attackable pairs only (injection tasks with an empty ground truth excluded); falls back to official. */
+function aggAtt(rows, def, key = "asr_attackable") {
+  const rs = rows.filter((r) => r.defense === def);
+  if (!rs.length || rs.some((r) => r[key] == null)) return agg(rows, def, "asr", "n_attacked_runs");
+  const w = rs.reduce((a, r) => a + r.n_attackable_pairs, 0);
+  return w ? rs.reduce((a, r) => a + r[key] * r.n_attackable_pairs, 0) / w : null;
+}
 function renderBench(pl) {
   $$("#plannerTabs .subtab").forEach((b) => b.classList.toggle("active", b.dataset.pl === pl));
   const rows = BENCH.filter((r) => r.planner === pl);
@@ -454,8 +461,8 @@ function renderBench(pl) {
   const suites = [...new Set(rows.map((r) => r.suite))];
   const nAtt = rows.filter((r) => r.defense === "warrant").reduce((a, r) => a + r.n_attacked_runs, 0);
   $("#benchHero").innerHTML = `
-    <div class="stat red"><div class="n">${pct(agg(rows, "none", "asr", "n_attacked_runs"))}</div><div class="l">Attack success, undefended</div></div>
-    <div class="stat teal"><div class="n">${pct(agg(rows, "warrant", "asr", "n_attacked_runs"))}</div><div class="l">Attack success, WARRANT</div></div>
+    <div class="stat red"><div class="n">${pct(aggAtt(rows, "none"))}</div><div class="l">Attack success, undefended<br><span class="prov">of attacks that can happen (official ${pct(agg(rows, "none", "asr", "n_attacked_runs"))})</span></div></div>
+    <div class="stat teal"><div class="n">${pct(aggAtt(rows, "warrant", "asr_executed_attackable"))}</div><div class="l">Attacks executed, WARRANT<br><span class="prov">official AgentDojo score ${pct(agg(rows, "warrant", "asr", "n_attacked_runs"))}</span></div></div>
     <div class="stat green"><div class="n">${pct(agg(rows, "warrant", "benign_utility", "n_user_tasks"))}</div><div class="l">Benign utility, WARRANT (undefended ${pct(agg(rows, "none", "benign_utility", "n_user_tasks"))})</div></div>
     <div class="stat navy"><div class="n">${nAtt}</div><div class="l">attacked runs · ${suites.length} suites · ${esc(rows[0]?.attack || "")}</div></div>`;
   const legend = defs.map((d) => `<span><i style="background:${DEF_COLOR[d]}"></i>${DEF_LABEL[d]}</span>`).join("");
@@ -466,10 +473,10 @@ function renderBench(pl) {
   }).join("")}</div></div>`).join("");
   $("#chartAsr").innerHTML = chart("asr");
   $("#chartUa").innerHTML = chart("utility_under_attack");
-  $("#benchTable").innerHTML = `<thead><tr><th>Suite</th><th>Defence</th><th>Model</th><th>Benign utility</th><th>Utility under attack</th><th>ASR</th><th>Tasks</th><th>Attacked runs</th><th>Date</th></tr></thead><tbody>` +
-    rows.sort((a, b) => a.suite.localeCompare(b.suite) || defs.indexOf(a.defense) - defs.indexOf(b.defense)).map((r) => `<tr><td>${r.suite}</td><td>${DEF_LABEL[r.defense] || r.defense}</td><td class="mono">${esc(r.model)}</td><td>${pct(r.benign_utility)}</td><td>${pct(r.utility_under_attack)}</td><td><b style="color:${r.asr > 0.1 ? "var(--red)" : "var(--teal)"}">${pct(r.asr)}</b></td><td>${r.n_user_tasks}</td><td>${r.n_attacked_runs}</td><td class="mono">${esc(r.date)}</td></tr>`).join("") + "</tbody>";
+  $("#benchTable").innerHTML = `<thead><tr><th>Suite</th><th>Defence</th><th>Model</th><th>Benign utility</th><th>Utility under attack</th><th>ASR (official)</th><th>ASR executed</th><th>Attackable pairs</th><th>ASR attackable</th><th>Asked user</th><th>Tasks</th><th>Attacked runs</th><th>Date</th></tr></thead><tbody>` +
+    rows.sort((a, b) => a.suite.localeCompare(b.suite) || defs.indexOf(a.defense) - defs.indexOf(b.defense)).map((r) => `<tr><td>${r.suite}</td><td>${DEF_LABEL[r.defense] || r.defense}</td><td class="mono">${esc(r.model)}</td><td>${pct(r.benign_utility)}</td><td>${pct(r.utility_under_attack)}</td><td><b style="color:${r.asr > 0.1 ? "var(--red)" : "var(--teal)"}">${pct(r.asr)}</b></td><td>${pct(r.asr_executed)}</td><td>${r.n_attackable_pairs ?? "–"}</td><td>${pct(r.asr_attackable)}</td><td>${pct(r.asked_user_rate_attacked)}</td><td>${r.n_user_tasks}</td><td>${r.n_attacked_runs}</td><td class="mono">${esc(r.date)}</td></tr>`).join("") + "</tbody>";
   $("#benchNote").innerHTML = pl === "oracle"
-    ? `<b>How to read this:</b> the "fully hijacked planner" replays each task's correct tool calls <i>and</i> executes the attacker's goal the moment it sees the injection, so it is the worst case for any defence that relies on the model resisting. Detector-style masking cannot help here; only the gate can. Remaining slack ASR is AgentDojo's <code>injection_task_5</code>, which is scored on <i>attempted</i> calls (the gate blocked them but the checker counts the attempt). Remaining travel ASR comes from attacks that reuse an already-authorised effect with values that legitimately exist in the data (e.g. booking a different real hotel). Rules were developed on AgentDojo tasks, so a held-out evaluation is still needed.`
+    ? `<b>How to read this:</b> the "fully hijacked planner" replays each task's correct tool calls <i>and</i> executes the attacker's goal the moment it sees the injection, so it is the worst case for any defence that relies on the model resisting. Detector-style masking cannot help here; only the gate can. <b>Official</b> = AgentDojo's own scorer, which counts every <i>proposed</i> call (AgentDojo issue #168): the remaining slack ASR is <code>injection_task_5</code>, blocked by the gate but counted. <b>Executed</b> counts only calls that actually ran. <b>Attackable</b> excludes the 9 injection tasks whose ground truth is empty in the default environment (workspace 6-13, travel 6), which no planner can carry out here. Remaining travel ASR comes from attacks that reuse an already-authorised effect with values that legitimately exist in the data (e.g. booking a different real hotel). Rules were developed on AgentDojo tasks, so a held-out evaluation is still needed.`
     : `<b>Live LLM run</b> on Groq with AgentDojo's <code>important_instructions</code> attack. Subset sizes are limited by the Groq free tier; see the table for exact task counts.`;
 }
 
