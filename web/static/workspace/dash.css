@@ -118,3 +118,6 @@ svg.logo { width: 22px; height: 22px; }
 /* one scrollbar only: the rail and sidebar scroll without showing their own bars */
 .dash .rail, .dash .nav { scrollbar-width: none; }
 .dash .rail::-webkit-scrollbar, .dash .nav::-webkit-scrollbar { display: none; }
+
+.auth-btn { display: flex; justify-content: center; margin: 4px 0 2px; text-decoration: none; }
+.dash .avatar.pic { background-size: cover; background-position: center; color: transparent; }

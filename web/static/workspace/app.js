@@ -773,6 +773,11 @@
       $("#meName").textContent = d.user.name;
       $("#meEmail").textContent = `${d.user.email}${d.demo ? " · demo profile" : ""}`;
       if (!store.get() && d.last_session) store.set(d.last_session);
+      if (d.user.picture) { $("#setBtn").classList.add("pic"); $("#setBtn").style.backgroundImage = `url("${d.user.picture.replace(/"/g, "")}")`; }
+      const st = await api("../../auth/status").catch(() => ({}));
+      const link = $("#authLink");
+      if (st.signed_in) { link.textContent = "Sign out"; link.href = "/auth/logout"; link.hidden = false; }
+      else if (st.configured) { link.textContent = "Sign in with Google"; link.href = "/auth/google/login"; link.hidden = false; }
     } catch (e) { $("#setBtn").textContent = "?"; }
   }
   await loadMe();
