@@ -511,6 +511,8 @@ class WarrantGate(BasePipelineElement):
         names = self._record_names(state)
         for p in provs:
             sp = self._span(state, p.span_id)
+            if sp is not None and sp.trusted_source:
+                continue  # the user's history holding a value the agent wrote there (origin stamp) is no witness
             doc = state.docs.get(sp.doc) if sp is not None else None
             text = doc.text if doc is not None else p.excerpt
             toks = _name_tokens(text)
