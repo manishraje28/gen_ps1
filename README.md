@@ -44,6 +44,10 @@ setup.bat            :: creates .venv, installs requirements, creates .env
 run_demo.bat         :: opens http://127.0.0.1:8000
 ```
 
+The main UI is the **WARRANT Workspace** at `/`: one assistant over mail, Slack, bank and drive, every task run
+with and without WARRANT side by side, checkpoint tickets, approvals and session memory. The original demo UI
+(live demo, playground, AgentDojo benchmark tab) is at `/classic`.
+
 macOS/Linux: `./run_demo.sh`. Python 3.10+.
 
 No key? The demo still runs with an **offline scripted planner** (a deterministic stand-in that behaves
