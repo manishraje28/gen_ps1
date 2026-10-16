@@ -32,13 +32,15 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 @app.get("/")
-def index():
-    return FileResponse(STATIC / "index.html")
-
-
 @app.get("/track")
-def track():
+def index():
     return FileResponse(STATIC / "track" / "index.html")
+
+
+@app.get("/plain")
+def plain():
+    """The previous plain-language UI."""
+    return FileResponse(STATIC / "index.html")
 
 
 @app.get("/api/config")
