@@ -456,8 +456,15 @@ class WarrantGate(BasePipelineElement):
                     return {**res, "provenance": [prov.as_dict()], "verdict": ALLOWED, "kind": kind.value,
                             "why": f"warrant: {kind.value} ({prov.tool or 'user'})"}
         if SlotKind.DERIVED in allowed:
-            known = [n for kind in (SlotKind.USER_LITERAL, SlotKind.TRUSTED, SlotKind.LOOKUP, SlotKind.DELEGATED)
-                     if kind in allowed for n, _ in pools.get(kind, [])]
+            # A DERIVED amount is computed from the user's words, their records and evidence (never
+            # from injected text). Copying one such number unchanged is the trivial computation.
+            operands = (SlotKind.USER_LITERAL, SlotKind.TRUSTED, SlotKind.LOOKUP) + ((SlotKind.DELEGATED,) if SlotKind.DELEGATED in allowed else ())
+            for kind in operands:
+                for n, prov in pools.get(kind, []):
+                    if abs(n - x) <= tol:
+                        return {**res, "provenance": [prov.as_dict()], "verdict": ALLOWED, "kind": SlotKind.DERIVED.value,
+                                "why": f"warrant: DERIVED (= {n:g} from {prov.tool or 'user'})"}
+            known = [n for kind in operands for n, _ in pools.get(kind, [])]
             # the user's own numbers first, so their arithmetic wins over coincidences in documents
             expr = derive_amount(x, list(dict.fromkeys(known)))
             if expr is not None:

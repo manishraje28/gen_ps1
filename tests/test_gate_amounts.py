@@ -84,3 +84,21 @@ def test_three_number_derivation():
     expr = derive_amount(200.29, [19.5, 5.29, 1000.0])
     assert expr is not None and "5.29" in expr and "19.5" in expr
     assert derive_amount(200.29 * 3, [19.5, 5.29, 1000.0]) is None
+
+
+def test_derived_only_contract_accepts_amount_from_the_bill(tmp_path):
+    """Regression (live Playground): the contract LLM set amount <- DERIVED only; the INR 1,180 printed
+    on the water bill was refused (SLOT_MISMATCH) because DERIVED looked at no source numbers."""
+    from warrant.contract import Slot, SlotKind
+    from warrant.policy import Sink
+    bill = "Your water bill for September 2026 is ready.\nAmount: INR 1,180.00\nPay to our usual account IBAN IN45WATR0000008812."
+    q = "Check the email from Mumbai Water about my bill and pay it."
+    from tests.test_gate_binding import run_call
+    from warrant.contract import compile_contract
+    c = compile_contract(q, ["send_money"], use_llm=False)
+    slots = [s for s in c.slots if s.sink != Sink.AMOUNT] + [Slot(sink=Sink.AMOUNT, kinds=[SlotKind.DERIVED])]
+    args = {"recipient_iban": "IN45WATR0000008812", "amount": 1180, "subject": "Water"}
+    d, env, _ = run_call(tmp_path, q, [("read_email", bill)], ("send_money", args), {"slots": slots})
+    assert d["decision"] == "ALLOWED", d
+    d, _, _ = run_call(tmp_path, q, [("read_email", bill)], ("send_money", {**args, "amount": 11800}), {"slots": slots})
+    assert d["decision"] == REFUSED  # still bound: an inflated amount is refused
