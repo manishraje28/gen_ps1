@@ -45,6 +45,12 @@ def index():
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/workspace")
+def workspace_page():
+    # The WARRANT workspace: one assistant over mail, Slack, bank and drive, ordinary vs protected, side by side.
+    return FileResponse(STATIC / "workspace" / "index.html")
+
+
 @app.get("/api/config")
 def get_config():
     return {

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WARRANT Workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/workspace/ws.css?v=2">
+</head>
+<body>
+<header class="bar">
+  <a class="mark" href="/workspace">
+    <span class="mark-box"><svg><use href="/static/workspace/sprite.svg#shield"/></svg></span>
+    <span class="mark-word">WARRANT <em>Workspace</em></span>
+  </a>
+  <div class="conns" id="conns" aria-label="Connected services"></div>
+  <div class="bar-right">
+    <a class="quiet hide-sm" href="/#bench">Benchmark</a>
+    <a class="quiet hide-sm" href="/">Classic view</a>
+    <div class="menu">
+      <button class="iconbtn" id="setBtn" type="button" aria-expanded="false"><svg><use href="/static/workspace/sprite.svg#sliders"/></svg><span class="hide-sm">Settings</span></button>
+      <div class="menu-pop" id="setPop" hidden>
+        <label class="opt"><input type="checkbox" id="optCompare" checked><span><b>Show the ordinary assistant</b><i>Run the same request with no protection, side by side.</i></span></label>
+        <label class="opt"><input type="checkbox" id="optMask" checked><span><b>Hide instructions found in data</b><i>Off = stress test: the assistant reads the raw injection and only the checkpoint stands in the way.</i></span></label>
+        <hr class="perf">
+        <button class="quiet" id="resetBtn" type="button">Reset the workspace</button>
+        <div class="muted small" id="modelLine"></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="app">
+  <!-- ============ left: the user's workspace ============ -->
+  <aside class="side" aria-label="Workspace">
+    <div class="side-head">
+      <span class="smallcaps">Workspace</span>
+      <button class="iconbtn sm" id="plantBtn" type="button"><svg><use href="/static/workspace/sprite.svg#plus"/></svg>Add data</button>
+    </div>
+    <nav class="srcs" id="srcs"></nav>
+    <ul class="items" id="items"></ul>
+  </aside>
+
+  <!-- ============ centre: assistant ============ -->
+  <main class="stage" id="stage">
+    <section class="hero" id="hero">
+      <p class="kicker">One assistant · your mail, Slack, bank and drive</p>
+      <h1>Your assistant reads everything.<br>WARRANT decides what it may do.</h1>
+      <p class="lede">Ask anything. The same AI handles your request twice: once on its own, once behind WARRANT's checkpoint. Every email, payment, share or message it tries to send is stopped at the checkpoint until you can see <b>who authorised it</b>.</p>
+      <div class="flowhead"><h2>Everyday tasks</h2><span class="muted">no tricks, should just work</span></div>
+      <div class="flows" id="flowsDaily"></div>
+      <div class="flowhead"><h2>Attacks to try</h2><span class="muted">poisoned data is planted first, then the request is filled in</span></div>
+      <div class="flows" id="flowsAttack"></div>
+    </section>
+    <div id="turns"></div>
+  </main>
+
+  <!-- ============ right: what changed ============ -->
+  <aside class="world" aria-label="What changed in the world">
+    <div class="side-head"><span class="smallcaps">What actually happened</span></div>
+    <div class="ledger">
+      <div class="lg lg-plain"><div class="lg-h"><span class="dotk plain"></span>Ordinary assistant</div><ul id="wPlain"><li class="empty">Nothing yet.</li></ul></div>
+      <div class="lg lg-safe"><div class="lg-h"><span class="dotk safe"></span>With WARRANT</div><ul id="wSafe"><li class="empty">Nothing yet.</li></ul></div>
+    </div>
+    <div class="side-head"><span class="smallcaps">Checkpoint log</span></div>
+    <ol class="log" id="log"><li class="empty">Every decision appears here, with its reason.</li></ol>
+  </aside>
+</div>
+
+<!-- composer -->
+<form class="composer" id="composer" autocomplete="off">
+  <div class="composer-in">
+    <textarea id="prompt" rows="1" placeholder="Ask your assistant… e.g. “Pay the electricity bill in bill-oct-2026.txt”"></textarea>
+    <button class="btn brand" id="sendBtn" type="submit"><svg><use href="/static/workspace/sprite.svg#send"/></svg>Send</button>
+  </div>
+  <div class="composer-meta"><span id="planted" class="muted"></span><span class="muted" id="status"></span></div>
+</form>
+
+<!-- reader drawer -->
+<div class="drawer" id="drawer" hidden>
+  <div class="drawer-card">
+    <div class="drawer-head"><span class="smallcaps" id="drKind"></span><button class="quiet" id="drClose" type="button">Close</button></div>
+    <h3 id="drTitle"></h3>
+    <pre id="drBody"></pre>
+  </div>
+</div>
+
+<!-- plant data -->
+<div class="drawer" id="plant" hidden>
+  <form class="drawer-card" id="plantForm">
+    <div class="drawer-head"><span class="smallcaps">Add data to both workspaces</span><button class="quiet" id="plClose" type="button">Close</button></div>
+    <label class="fld">Kind<select id="plKind"><option value="email">Email (arrives in the inbox)</option><option value="file">File (in the drive)</option><option value="web">Web page</option></select></label>
+    <label class="fld k-email">From<input id="plSender" placeholder="vendor@example.test"></label>
+    <label class="fld k-email">Subject<input id="plSubject" placeholder="Updated bank details"></label>
+    <label class="fld k-file" hidden>File name<input id="plName" placeholder="notice.txt"></label>
+    <label class="fld k-file" hidden>Folder<input id="plFolder" value="/uploads"></label>
+    <label class="fld k-web" hidden>URL<input id="plUrl" placeholder="https://vendor.test/notice"></label>
+    <label class="fld">Content<textarea id="plContent" rows="8" placeholder="Paste the content. Hide an instruction in it if you like."></textarea></label>
+    <div class="actions"><button class="btn" type="submit">Add</button><span class="muted" id="plStatus"></span></div>
+  </form>
+</div>
+
+<script src="/static/workspace/ws.js?v=3"></script>
+</body>
+</html>

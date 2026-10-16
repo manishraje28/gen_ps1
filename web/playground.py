@@ -340,7 +340,10 @@ def new_session() -> dict:
         SESSIONS.pop(next(iter(SESSIONS)))
     s = Session()
     SESSIONS[s.id] = s
-    return {"sid": s.id, "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL}
+    env = s.lanes["warrant"].env
+    return {"sid": s.id, "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
+            "connections": {"gmail": "live" if gmail.is_live(env.inbox) else "simulated",
+                            "slack": "live" if env.slack.live else "simulated", "bank": "simulated", "drive": "simulated"}}
 
 
 @router.get("/world")
