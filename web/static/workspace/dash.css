@@ -114,3 +114,7 @@ svg.logo { width: 22px; height: 22px; }
 .dash .stat2 .go { font-size: 13px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash .stat2 .chev svg { width: 14px; height: 14px; }
 .dash .stat2:hover { transform: none; border-color: var(--ink-3); box-shadow: none; }
+
+/* one scrollbar only: the rail and sidebar scroll without showing their own bars */
+.dash .rail, .dash .nav { scrollbar-width: none; }
+.dash .rail::-webkit-scrollbar, .dash .nav::-webkit-scrollbar { display: none; }
