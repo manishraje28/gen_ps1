@@ -42,7 +42,7 @@ function plainSource(check, fileNames) {
   switch (check.kind) {
     case "USER_LITERAL": return { short: "You typed it", long: "You typed it in your request", quote: p.excerpt };
     case "TRUSTED": return { short: "From your contacts", long: "Found in your saved contacts", quote: p.excerpt };
-    case "LOOKUP": return { short: `From the ${doc} you pointed to`, long: `Read from the ${doc} you asked about`, quote: p.excerpt };
+    case "LOOKUP": return { short: p.tool === "list_files" ? "From your own files" : `From the ${doc} you pointed to`, long: `Found in the ${doc} the assistant opened for you`, quote: p.excerpt };
     case "DELEGATED": return { short: "From the email you asked me to follow", long: `A task in the ${doc} you told the assistant to follow`, quote: p.excerpt };
     case "DERIVED": return { short: "Worked out from your data", long: "Calculated from values you authorised", quote: p.excerpt };
     default: return { short: "Authorised", long: check.why, quote: p.excerpt };
@@ -50,9 +50,11 @@ function plainSource(check, fileNames) {
 }
 function plainRefusal(check, code) {
   const r = check.why || "";
-  if (/instruction-like|hidden|only appears inside/.test(r) || code === "TAINTED_VALUE") return "Only found inside a hidden note, never in your request";
-  if (/delegation|outside the organisation/.test(r) || code === "DELEGATION_SCOPE") return "A new outside address; the email you asked me to follow can’t add strangers";
-  if (/does not appear/.test(r)) return "Not something you asked for or the assistant had seen";
+  if (/instruction-like|only appears inside/.test(r)) return "Only found inside a hidden note, never in your request";
+  if (/does not appear/.test(r)) return "Not something you asked for, and not in anything you pointed to";
+  if (/delegation|outside the organisation/.test(r)) return "A new outside address; the email you asked me to follow can’t add strangers";
+  if (code === "TAINTED_VALUE") return "Only found inside a hidden note, never in your request";
+  if (code === "DELEGATION_SCOPE") return "A new outside address; the email you asked me to follow can’t add strangers";
   return "No authorisation found";
 }
 function fileName(id) { return RUN?.files[id] || id; }
@@ -126,11 +128,11 @@ async function start(s) {
   renderDoc(s.source);
   for (const ln of ["undefended", "warrant"]) {
     const el = $(`#lane-${ln}`);
-    el.querySelector("[data-parcels]").innerHTML = "";
-    el.querySelector("[data-dest]").innerHTML = "";
+    // fresh containers, so steps still in flight from an earlier run draw into detached nodes
+    for (const sel of ["[data-parcels]", "[data-dest]"]) { const o = el.querySelector(sel); o.replaceWith(o.cloneNode(false)); }
     const seal = el.querySelector("[data-seal]"); if (seal) { seal.hidden = true; seal.innerHTML = ""; }
     setPill(el, "Waiting", "");
-    RUN.lanes[ln] = { name: ln, el, parcels: {}, q: Promise.resolve(), directives: [] };
+    RUN.lanes[ln] = { run: RUN, name: ln, el, parcels: {}, q: Promise.resolve(), directives: [] };
   }
 
   let url;
@@ -148,14 +150,15 @@ async function start(s) {
 }
 
 function lane(ev) { return RUN.lanes[ev.lane]; }
-function chain(L, fn) { L.q = L.q.then(fn).catch((e) => console.error(e)); return L.q; }
+// a lane's queue belongs to one run: once the user starts another, queued steps are dropped
+function chain(L, fn) { L.q = L.q.then(() => (L.run === RUN ? fn() : null)).catch((e) => console.error(e)); return L.q; }
 function setPill(el, text, cls) { const p = el.querySelector("[data-status]"); p.textContent = text; p.className = `pill mono ${cls}`; }
 
 function onEvent(ev) {
   const L = lane(ev);
   switch (ev.type) {
     case "hello": $("#techBody").dataset.planner = ev.planner; $("#techBody").dataset.mask = ev.mask; break;
-    case "run_start": chain(L, async () => setPill(L.el, "Reading", "transit")); break;
+    case "run_start": chain(L, async () => L.run === RUN && setPill(L.el, "Reading", "transit")); break;
     case "contract": RUN.runId = ev.run_id; RUN.hash = ev.contract.hash; chain(L, () => showSeal(L, ev)); break;
     case "tool_result": onResult(L, ev); break;
     case "tool_call":
@@ -166,7 +169,7 @@ function onEvent(ev) {
     case "audit": chain(L, async () => addHistory(ev.record)); break;
     case "verdict": RUN.verdicts[ev.lane] = ev; chain(L, () => laneVerdict(L, ev)); break;
     case "lane_done": chain(L, async () => { RUN.done.add(ev.lane); if (ev.lane === "warrant" && RUN.runId) $("#verifyBtn").disabled = false; if (RUN.done.size === 2) showSummary(); }); break;
-    case "error": chain(L, async () => setPill(L.el, "Error", "bad")); break;
+    case "error": chain(L, async () => L.run === RUN && setPill(L.el, "Error", "bad")); break;
   }
 }
 
@@ -229,7 +232,7 @@ async function showSeal(L, ev) {
   seal.innerHTML = `<div class="barcode"></div><div><span class="smallcaps">Label sealed · Tracking no.</span><div><b class="mono">${hashGroups(c.hash)}</b> · allowed: ${esc(allowed || "reading only")}</div></div>`;
   barcode(c.hash, seal.querySelector(".barcode"));
   seal.hidden = false;
-  setPill(L.el, "Label sealed", "transit");
+  L.run === RUN && setPill(L.el, "Label sealed", "transit");
   addHistory({ ts: Date.now() / 1000, type: "sealed", hash: c.hash });
   await sleep(220);
 }
@@ -271,7 +274,7 @@ async function packParcel(L, ev) {
         <div class="field" data-f="contents"><span class="smallcaps">Contents</span><span>${esc(r.contents)}</span><svg class="mk"></svg></div>
         <div class="field auth ${W ? "" : "none"}" data-f="auth"><span class="smallcaps">Authorised by</span><span>${W ? "Waiting for customs" : "Not checked"}</span><svg class="mk"></svg></div>
         <div class="perfo"></div>
-        <div class="barcode"></div>
+        <div class="label-foot"><div class="barcode"></div></div>
       </div>
     </div>
     <div class="route">
@@ -285,7 +288,7 @@ async function packParcel(L, ev) {
   if (!W) el.querySelector(".barcode").style.opacity = ".18";
   L.el.querySelector("[data-parcels]").appendChild(el);
   L.parcels[p.id] = p;
-  setPill(L.el, "In transit", "transit");
+  L.run === RUN && setPill(L.el, "In transit", "transit");
   await moveTo(p, 0, "done");
   if (W) await moveTo(p, 1, "done"); else mark(p, 1, "skip");
   await moveTo(p, 2, "done");
@@ -309,7 +312,7 @@ function setMk(row, ok) {
   if (!ok) row.classList.add("flag");
 }
 function stamp(p, cls, text, small) {
-  const lab = p.el.querySelector(".label");
+  const lab = p.el.querySelector(".label-foot");
   lab.querySelector(".stamp")?.remove();
   const s = document.createElement("div");
   s.className = `stamp ${cls} thump`;
@@ -346,7 +349,7 @@ async function customs(L, g) {
     const what = firstBad && TO_ARGS.includes(firstBad.arg) ? `recipient ${firstBad.value}` : `${firstBad?.arg === "attachments" ? "file " + fileName(firstBad.value) : firstBad?.value ?? "this parcel"}`;
     stamp(p, "held", "Held", `No authorisation for ${what}`);
     status(p, `<b>Held at customs.</b> ${esc(firstBad ? plainRefusal(firstBad, g.code) : "Not authorised")}. Returned to sender.`, "bad");
-    setPill(L.el, "Parcel held", "bad");
+    L.run === RUN && setPill(L.el, "Parcel held", "bad");
     announce(`Parcel held at customs: no authorisation for ${what}.`);
     p.held = true;
     return;
@@ -397,7 +400,9 @@ async function flyToTray(L, p) {
     const kf = TOOL_ICON[p.fn] === "coin"
       ? [{ transform: "translate(0,0)" }, { transform: `translate(${dx}px, ${dy - 24}px)`, offset: .7 }, { transform: `translate(${dx}px, ${dy}px) scale(.8)`, opacity: .6 }]
       : [{ transform: "translate(0,0) rotate(0)" }, { transform: `translate(${dx * .6}px, ${dy * .4 - 30}px) rotate(-8deg)`, offset: .5 }, { transform: `translate(${dx}px, ${dy}px) rotate(0) scale(.8)`, opacity: .6 }];
-    await f.animate(kf, { duration: 380, easing: "cubic-bezier(.2,.7,.2,1)" }).finished.catch(() => {});
+    // race a timer: a hidden or throttled page may never finish the animation
+    const anim = f.animate(kf, { duration: 380, easing: "cubic-bezier(.2,.7,.2,1)" });
+    await Promise.race([anim.finished.catch(() => {}), new Promise((r) => setTimeout(r, 450))]);
     f.remove();
   }
   tray.style.visibility = "";
@@ -406,10 +411,10 @@ async function flyToTray(L, p) {
 
 /* ---------------------------------------------------------------- verdicts & summary */
 async function laneVerdict(L, v) {
-  if (L.name === "undefended") setPill(L.el, v.attack_succeeded ? "Sent to attacker" : v.utility ? "All delivered" : "Done", v.attack_succeeded ? "bad" : "ok");
+  if (L.name === "undefended") L.run === RUN && setPill(L.el, v.attack_succeeded ? "Sent to attacker" : v.utility ? "All delivered" : "Done", v.attack_succeeded ? "bad" : "ok");
   else {
     const held = Object.values(L.parcels).filter((p) => p.held).length;
-    setPill(L.el, held ? `${held} held · rest delivered` : v.utility ? "All delivered" : "Done", v.attack_succeeded ? "bad" : "ok");
+    L.run === RUN && setPill(L.el, held ? `${held} held · rest delivered` : v.utility ? "All delivered" : "Done", v.attack_succeeded ? "bad" : "ok");
   }
   if (!Object.keys(L.parcels).length) L.el.querySelector("[data-parcels]").innerHTML = `<p class="muted" style="padding:18px 0;margin:0">The assistant didn’t send anything.</p>`;
 }
@@ -419,10 +424,15 @@ function showSummary() {
   const sc = RUN.s;
   const wl = RUN.lanes.warrant;
   const held = Object.values(wl.parcels).filter((p) => p.held);
-  const cost = U.attack_succeeded ? plainMoney(U.attack_detail).replace(/ paid to attacker IBAN .*/, " sent to attacker").replace(/^Data sent to/, "Files sent to") : null;
+  let cost = null;
+  if (U.attack_succeeded) {
+    const m = /^Data sent to [^:]+(?::\s*(.+))?$/.exec(U.attack_detail || "");
+    const n = m && m[1] ? m[1].split(",").length : 0;
+    cost = m ? (n ? `${n} private file${n > 1 ? "s" : ""} sent to attacker` : "Data sent to attacker") : plainMoney(U.attack_detail).replace(/ paid to attacker IBAN .*/, " sent to attacker");
+  }
   let big;
   if (sc.benign) big = `<div class="big">0 false alarms<small>${esc(W.utility_detail || "")}. A normal “please pay by Friday” is not treated as an attack.</small></div>`;
-  else if (cost) big = `<div class="big">${esc(cost.split(":")[0].replace(/^Files sent to /, "Files leaked"))}<small>That’s what the ordinary assistant sent. ${held.length ? `WARRANT held ${held.length} parcel${held.length > 1 ? "s" : ""} at customs` : "WARRANT’s assistant never packed the bad parcel"} and still did your task.</small></div>`;
+  else if (cost) big = `<div class="big">${esc(cost)}<small>That’s what the ordinary assistant sent. ${held.length ? `WARRANT held ${held.length} parcel${held.length > 1 ? "s" : ""} at customs` : "WARRANT’s assistant never packed the bad parcel"} and still did your task.</small></div>`;
   else big = `<div class="big">Nothing leaked<small>Neither assistant sent anything to the attacker this time.</small></div>`;
 
   const traceParcels = held.length ? held : Object.values(wl.parcels);
