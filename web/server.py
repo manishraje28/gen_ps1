@@ -31,6 +31,15 @@ app.include_router(playground_router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.middleware("http")
+async def no_stale_ui(request, call_next):
+    # The UI has no build step; make browsers revalidate so a demo machine never runs a stale app.js.
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")

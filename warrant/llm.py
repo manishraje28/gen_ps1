@@ -30,7 +30,8 @@ def get_client() -> openai.OpenAI:
     if _client is None:
         if not config.GROQ_API_KEY:
             raise RuntimeError("GROQ_API_KEY is not set. Put it in .env (see .env.example).")
-        _client = openai.OpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL, max_retries=0)
+        # A dropped connection must fail fast and be retried below, not hang for the SDK default of 10 minutes.
+        _client = openai.OpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL, max_retries=0, timeout=60.0)
     return _client
 
 
