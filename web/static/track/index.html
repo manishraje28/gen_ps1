@@ -8,16 +8,17 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/track/track.css?v=1">
+  <link rel="stylesheet" href="/static/track/track.css?v=2">
 </head>
 <body>
 <header class="bar">
-  <a class="mark" href="/track" id="homeLink" aria-label="WARRANT Track, home">
+  <a class="mark" href="/" id="homeLink" aria-label="WARRANT Track, home">
     <span class="mark-box" aria-hidden="true"><svg><use href="/static/track/icons/sprite.svg#parcel"/></svg></span>
     <span class="mark-word">WARRANT <em>Track</em></span>
   </a>
   <nav class="bar-right">
-    <a class="quiet" href="/">Classic view</a>
+    <a class="quiet" href="#workspace">Your workspace</a>
+    <a class="quiet hide-sm" href="/plain">Classic view</a>
     <div class="menu">
       <button class="iconbtn" id="settingsBtn" aria-haspopup="true" aria-expanded="false" title="Settings">
         <svg><use href="/static/track/icons/sprite.svg#sliders"/></svg><span class="hide-sm">Settings</span>
@@ -60,8 +61,14 @@
       </aside>
     </div>
 
+    <a class="own" href="#workspace">
+      <span class="own-ico"><svg><use href="/static/track/icons/sprite.svg#parcel"/></svg></span>
+      <span class="own-copy"><span class="smallcaps">Use it for real</span><b>Ask your assistant anything</b><span>A live AI assistant works on a sample company workspace: emails, files, bills, contacts. Add your own data, hidden notes and all, and track every parcel it sends.</span></span>
+      <span class="go">Open workspace <svg><use href="/static/track/icons/sprite.svg#arrow"/></svg></span>
+    </a>
+
     <div class="section-head">
-      <h2>Pending shipments</h2>
+      <h2>Or watch a pending shipment</h2>
       <span class="mono muted" id="modeTag">Offline demo</span>
     </div>
     <div class="shipments" id="shipments"></div>
@@ -77,6 +84,52 @@
         <p class="order"><span class="smallcaps">Your request</span><span id="runQuery"></span></p>
       </div>
     </div>
+
+    <section class="desk" id="desk" hidden>
+      <div class="desk-grid">
+        <div class="desk-main">
+          <form class="composer" id="composer" autocomplete="off">
+            <label class="smallcaps" for="msg">Ask your assistant</label>
+            <div class="composer-row">
+              <textarea id="msg" rows="2" placeholder="e.g. Pay the electricity bill in bill-oct-2026.txt"></textarea>
+              <button class="btn brand" id="sendBtn" type="submit">Send</button>
+            </div>
+            <div class="composer-opts">
+              <label class="chk"><input type="checkbox" id="compareChk" checked> Also run an ordinary assistant for comparison</label>
+              <span class="mono muted" id="deskState"></span>
+            </div>
+            <div class="chips" id="chips"></div>
+          </form>
+          <p class="desk-warn" id="deskWarn" hidden></p>
+        </div>
+        <aside class="ws" id="ws">
+          <div class="ws-head">
+            <span class="smallcaps">Your workspace</span>
+            <div class="ws-actions">
+              <button class="quiet" type="button" id="addBtn">+ Add data</button>
+              <button class="quiet" type="button" id="resetBtn">Reset</button>
+            </div>
+          </div>
+          <div class="ws-tabs" id="wsTabs" role="tablist"></div>
+          <ul class="ws-list" id="wsList"></ul>
+          <form class="add" id="addForm" hidden>
+            <div class="add-kinds">
+              <label><input type="radio" name="kind" value="email" checked> Email</label>
+              <label><input type="radio" name="kind" value="file"> File</label>
+              <label><input type="radio" name="kind" value="web"> Web page</label>
+            </div>
+            <input class="in" name="sender" placeholder="From (e.g. billing@vendor.test)" data-k="email">
+            <input class="in" name="subject" placeholder="Subject" data-k="email">
+            <input class="in" name="name" placeholder="File name (e.g. notes.txt)" data-k="file" hidden>
+            <input class="in" name="folder" placeholder="Folder (default /uploads)" data-k="file" hidden>
+            <input class="in" name="url" placeholder="URL (e.g. https://vendor.test/pay)" data-k="web" hidden>
+            <textarea class="in" name="content" rows="5" placeholder="Paste the text. Add a hidden note if you want to test an attack."></textarea>
+            <label class="upl"><input type="file" id="upFile"> <span>or upload a file (txt, pdf, docx, eml, html)</span></label>
+            <div class="add-row"><button class="btn" type="submit">Add to workspace</button><button class="quiet" type="button" id="addCancel">Cancel</button><span class="mono muted" id="addOut"></span></div>
+          </form>
+        </aside>
+      </div>
+    </section>
 
     <div class="doc-wrap">
       <div class="doc" id="doc">
@@ -130,6 +183,7 @@
 </main>
 
 <div class="sr-only" aria-live="polite" id="live"></div>
-<script src="/static/track/track.js?v=1"></script>
+<script src="/static/track/track.js?v=3"></script>
+<script src="/static/track/desk.js?v=2"></script>
 </body>
 </html>
