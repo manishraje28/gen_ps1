@@ -33,7 +33,7 @@ from fastapi import Depends, Request, APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from integrations import gmail
+from integrations import gmail, minimoth
 from demo.env import TODAY, USER_EMAIL, AcmeEnv, Contact, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
 from demo.runner import INTERNAL_DOMAINS
 from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
@@ -485,8 +485,11 @@ def run_turn_lane(sess: Session, lane_name: str, query: str, mask: bool, sink, g
 @router.get("/me")
 def me(user: dict = Depends(current_user)) -> dict:
     sid = store.latest_session(user["id"])
-    return {"user": {k: user.get(k) for k in ("id", "name", "email", "picture", "phone", "phone_verified")},
-            "demo": user["id"] == store.DEMO_USER, "last_session": sid}
+    phone = user.get("phone") or ""
+    return {"user": {**{k: user.get(k) for k in ("id", "name", "email", "picture", "phone_verified")},
+                     "phone": minimoth.mask(phone) if phone else ""},
+            "demo": user["id"] == store.DEMO_USER, "last_session": sid,
+            "otp": {"available": minimoth.available(), "test_key": minimoth.is_test_key(), "required": otp_required(user)}}
 
 
 @router.post("/session")
@@ -625,6 +628,21 @@ class Approval(BaseModel):
     sid: str
     id: str
     approve: bool = True
+    code: str = ""   # WhatsApp/SMS code when OTP approvals are on
+
+
+OTP_MAX_SENDS = 3        # per paused action
+OTP_MIN_GAP = 30.0       # seconds between sends for the same action
+PHONE_PENDING: dict[str, tuple[str, float]] = {}   # user id -> (number being verified, sent at)
+
+
+def otp_required(user: dict) -> bool:
+    """Approvals need a code once the user has a verified number and MiniMoth is configured."""
+    return minimoth.available() and bool(user.get("phone_verified")) and bool(user.get("phone"))
+
+
+def _otp_error(exc: "minimoth.MinimothError") -> HTTPException:
+    return HTTPException(exc.status if exc.status in (400, 401, 402, 403, 404, 409, 422, 429, 503) else 502, exc.args[0])
 
 
 @router.post("/approve")
@@ -638,6 +656,19 @@ def approve(body: Approval, user: dict = Depends(current_user)) -> dict:
     row = store.approval(s.id, s.user_id, body.id)
     if row is None or row["status"] != "pending" or row["fingerprint"] != store.fingerprint(call):
         raise HTTPException(409, "this approval no longer matches the paused action")
+    method = "button"
+    if body.approve and otp_required(user):
+        if not body.code:
+            s.pending[body.id] = call
+            raise HTTPException(403, "this action needs the code sent to your phone")
+        try:
+            minimoth.verify(user["phone"], body.code)
+        except minimoth.MinimothError as exc:
+            s.pending[body.id] = call
+            store.audit(s.user_id, s.id, "otp_failed", {"id": body.id, "reason": exc.code})
+            raise _otp_error(exc) from exc
+        method = "otp"
+        store.audit(s.user_id, s.id, "otp_verified", {"id": body.id, "fingerprint": row["fingerprint"]})
     if not body.approve:
         store.decide_approval(s.id, s.user_id, body.id, "rejected", "button")
         store.audit(s.user_id, s.id, "approval", {"id": body.id, "approved": False, "fingerprint": row["fingerprint"]})
@@ -664,8 +695,8 @@ def approve(body: Approval, user: dict = Depends(current_user)) -> dict:
                 else:  # session restored from disk: stamp directly
                     lane.origins[origin_key(v)] = CONFIRMED
                 store.remember(s.user_id, origin_key(v), str(v), origin=str(call.get("code") or "NEEDS_INPUT"), confirmed_by="user")
-            store.decide_approval(s.id, s.user_id, body.id, "approved", "button")
-            store.audit(s.user_id, s.id, "approval", {"id": body.id, "approved": True, "fingerprint": row["fingerprint"], "values": call.get("values")})
+            store.decide_approval(s.id, s.user_id, body.id, "approved", method)
+            store.audit(s.user_id, s.id, "approval", {"id": body.id, "approved": True, "method": method, "fingerprint": row["fingerprint"], "values": call.get("values")})
             if s.history:
                 s.history[-1].setdefault("approvals", []).append({"id": body.id, "approved": True, "effects": side_effects(before, lane.env)})
                 save_task(s, len(s.history) - 1)
@@ -695,3 +726,72 @@ def audit_view(sid: str | None = None, user: dict = Depends(current_user)) -> di
 @router.get("/memory")
 def memory_view(user: dict = Depends(current_user)) -> dict:
     return {"memory": store.memories(user["id"])}
+
+
+class ApprovalOtp(BaseModel):
+    sid: str
+    id: str
+
+
+@router.post("/approve/otp")
+def approve_otp(body: ApprovalOtp, user: dict = Depends(current_user)) -> dict:
+    """Send a code to the user's verified phone for one paused action (bound to that action's fingerprint)."""
+    if not otp_required(user):
+        raise HTTPException(400, "verify your phone number first (Settings)")
+    s = get_session(body.sid, user)
+    call = s.pending.get(body.id)
+    row = store.approval(s.id, s.user_id, body.id)
+    if call is None or row is None or row["status"] != "pending" or row["fingerprint"] != store.fingerprint(call):
+        raise HTTPException(409, "this approval no longer matches the paused action")
+    if (row.get("otp_sends") or 0) >= OTP_MAX_SENDS:
+        raise HTTPException(429, "too many codes for this action; reject it and run the task again")
+    if time.time() - (row.get("otp_last") or 0) < OTP_MIN_GAP:
+        raise HTTPException(429, "wait a few seconds before asking for another code")
+    try:
+        sent = minimoth.send(user["phone"])
+    except minimoth.MinimothError as exc:
+        raise _otp_error(exc) from exc
+    store.approval_otp_sent(s.id, s.user_id, body.id, str(sent.get("otp_id", "")))
+    store.audit(s.user_id, s.id, "otp_sent", {"id": body.id, "fingerprint": row["fingerprint"], "to": minimoth.mask(user["phone"])})
+    return {"sent": True, "to": minimoth.mask(user["phone"]), "expires_at": sent.get("expires_at"), "test_key": minimoth.is_test_key()}
+
+
+class PhoneSend(BaseModel):
+    phone: str
+
+
+class PhoneVerify(BaseModel):
+    code: str
+
+
+@router.post("/phone/send")
+def phone_send(body: PhoneSend, user: dict = Depends(current_user)) -> dict:
+    """Start verifying the number that will receive approval codes."""
+    try:
+        phone = minimoth.normalize_phone(body.phone)
+        last = PHONE_PENDING.get(user["id"])
+        if last and time.time() - last[1] < OTP_MIN_GAP:
+            raise HTTPException(429, "wait a few seconds before asking for another code")
+        minimoth.send(phone)
+    except minimoth.MinimothError as exc:
+        raise _otp_error(exc) from exc
+    PHONE_PENDING[user["id"]] = (phone, time.time())
+    store.audit(user["id"], "-", "phone_otp_sent", {"to": minimoth.mask(phone)})
+    return {"sent": True, "to": minimoth.mask(phone), "test_key": minimoth.is_test_key()}
+
+
+@router.post("/phone/verify")
+def phone_verify(body: PhoneVerify, user: dict = Depends(current_user)) -> dict:
+    pending = PHONE_PENDING.get(user["id"])
+    if not pending:
+        raise HTTPException(400, "ask for a code first")
+    phone = pending[0]
+    try:
+        minimoth.verify(phone, body.code)
+    except minimoth.MinimothError as exc:
+        store.audit(user["id"], "-", "phone_otp_failed", {"to": minimoth.mask(phone), "reason": exc.code})
+        raise _otp_error(exc) from exc
+    PHONE_PENDING.pop(user["id"], None)
+    store.set_phone(user["id"], phone, True)
+    store.audit(user["id"], "-", "phone_verified", {"to": minimoth.mask(phone)})
+    return {"verified": True, "phone": minimoth.mask(phone)}

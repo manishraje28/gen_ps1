@@ -75,6 +75,11 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         _conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         _conn.row_factory = sqlite3.Row
         _conn.executescript(SCHEMA)
+        for col in ("otp_id TEXT DEFAULT ''", "otp_sends INTEGER DEFAULT 0", "otp_last REAL DEFAULT 0"):
+            try:
+                _conn.execute(f"ALTER TABLE approvals ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass  # already migrated
         _path = path
         return _conn
 
@@ -227,3 +232,9 @@ def audit_rows(user_id: str, sid: str | None = None, limit: int = 200) -> list[d
     q, args = ("SELECT id, ts, kind, payload, hash FROM audit_log WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit)) if sid is None else \
               ("SELECT id, ts, kind, payload, hash FROM audit_log WHERE user_id=? AND sid=? ORDER BY id DESC LIMIT ?", (user_id, sid, limit))
     return [{**dict(r), "payload": json.loads(r["payload"])} for r in db().execute(q, args)]
+
+
+def approval_otp_sent(sid: str, user_id: str, call_id: str, otp_id: str) -> None:
+    with _lock:
+        db().execute("UPDATE approvals SET otp_id=?, otp_sends=otp_sends+1, otp_last=? WHERE sid=? AND user_id=? AND call_id=?",
+                     (otp_id, time.time(), sid, user_id, call_id))

@@ -121,3 +121,14 @@ svg.logo { width: 22px; height: 22px; }
 
 .auth-btn { display: flex; justify-content: center; margin: 4px 0 2px; text-decoration: none; }
 .dash .avatar.pic { background-size: cover; background-position: center; color: transparent; }
+
+/* WhatsApp approvals (MiniMoth) */
+.otp-box { margin: 8px 0 2px; padding: 10px 12px; border: 1px solid var(--card-line); border-radius: 10px; background: var(--soft); font-size: 13px; }
+.otp-box b { display: flex; align-items: center; gap: 6px; font-size: 13.5px; margin-bottom: 4px; }
+.otp-box b svg { width: 15px; height: 15px; color: #25D366; }
+.otp-box .row2 { display: flex; gap: 6px; margin-top: 8px; }
+.otp-box input, .approve input.code { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--line-2); border-radius: 8px; font: 13.5px var(--mono); background: var(--card); }
+.otp-box .ok { color: var(--ok); }
+.otp-box .err, .approve .err2 { color: var(--bad); font-size: 12.5px; margin-top: 6px; }
+.approve input.code { max-width: 120px; letter-spacing: .25em; text-align: center; }
+.approve .hint.wa { color: #128C7E; }

@@ -8,7 +8,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/workspace/ws.css?v=5">
   <link rel="stylesheet" href="/static/workspace/shell.css?v=5">
-  <link rel="stylesheet" href="/static/workspace/dash.css?v=5">
+  <link rel="stylesheet" href="/static/workspace/dash.css?v=6">
 </head>
 <body class="shell dash">
 <!-- ============ top bar (full width) ============ -->
@@ -22,6 +22,7 @@
       <div class="menu-pop" id="setPop" hidden>
         <div class="pop-user"><b id="meName"></b><span class="muted" id="meEmail"></span></div>
         <a class="btn ghost sm auth-btn" id="authLink" href="/auth/google/login" hidden></a>
+        <div class="otp-box" id="otpBox" hidden></div>
         <hr class="perf">
         <label class="opt"><input type="checkbox" id="optCompare" checked><span><b>Compare with an unprotected assistant</b><i>Every task also runs without WARRANT, side by side.</i></span></label>
         <label class="opt"><input type="checkbox" id="optGullible" checked><span><b>Worst case for attacks</b><i>When an attack task reads the poisoned data, both assistants try what the hidden instruction asks. Only the checkpoint differs.</i></span></label>
@@ -91,6 +92,6 @@
 
 <div class="toast" id="toast" hidden></div>
 <script src="/static/workspace/flows.js?v=1"></script>
-<script src="/static/workspace/app.js?v=11"></script>
+<script src="/static/workspace/app.js?v=12"></script>
 </body>
 </html>
