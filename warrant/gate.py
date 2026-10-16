@@ -494,6 +494,18 @@ class WarrantGate(BasePipelineElement):
                         decision["checks"].append({"arg": arg, "sink": "content", "value": tok, "allowed_kinds": [], "provenance": [p.as_dict() for p in provs[:2]],
                                                    "verdict": REFUSED, "code": "TAINTED_CONTENT",
                                                    "why": f"'{tok}' inside {arg} comes only from instruction-like text in untrusted data"})
+        # --- perturbation hook (lane D) ---
+        import os as _os  # noqa: PLC0415
+        if _os.environ.get("WARRANT_PERTURB") == "1":
+            from .perturb import check as _perturb_check  # noqa: PLC0415
+
+            _probe = _perturb_check(state, call, decision, planner=getattr(state, "planner", None),
+                                    context=getattr(state, "perturb_ctx", None))
+            if _probe:
+                decision["checks"].append(_probe["check"])
+                self.emit("perturb", **_probe["event"])
+                append_audit(self.audit_dir, state, _probe["audit"], self.emit)
+        # --- end perturbation hook ---
         bad = [x for x in decision["checks"] if x["verdict"] != ALLOWED]
         if bad:
             worst = next((x for x in bad if x["verdict"] == REFUSED), bad[0])

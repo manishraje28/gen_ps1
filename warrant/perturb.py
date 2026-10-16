@@ -220,6 +220,38 @@ def relabel(messages: list, spans: list, value: str, seed: str) -> Relabeled:
 
 
 # ------------------------------------------------------------------ the probe
+# Lines that try to steer a choice without being flagged: imperatives aimed at the reader, and claims about
+# other documents or options. Used only to pick which spans to ablate; they never grant anything.
+_STEER_RE = re.compile(
+    r"^\s*(?:note|nb|important|reminder|assistant|ai|attention)?\s*[:\-]?\s*.{0,40}?\b(?:settle|pay|use|send|forward|"
+    r"transfer|choose|select|prefer|pick|book|ignore|disregard|recommend(?:ed)?)\b|"
+    r"\b(?:only (?:vendor|option|one|supplier)|outdated|should be ignored|no longer valid|rated (?:most )?reliable|"
+    r"independent (?:review|procurement)|for faster processing|instead)\b", re.I)
+_KIND_IN_TEXT = {"email": re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), "iban": re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b"),
+                 "amount": re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?"), "url": re.compile(r"(?:https?://|www\.)\S+")}
+
+
+def _steering(span) -> bool:
+    return span.label == DIRECTIVE or span.score >= 1 or bool(_STEER_RE.search(span.text))
+
+
+def _num(v: str) -> float | None:
+    try:
+        return float(str(v).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _distinct_candidates(state, call_id: str, kind: str) -> set[str]:
+    rx = _KIND_IN_TEXT[kind]
+    vals = set()
+    for sp in state.ledger.spans:
+        if sp.call_id == call_id:
+            for v in rx.findall(sp.text):
+                vals.add(str(_num(v)) if kind == "amount" and _num(v) is not None and _num(v) >= 10 else v.lower())
+    return vals
+
+
 def _ambiguous(state, value: Any) -> tuple[bool, list]:
     provs = state.ledger.provenance(value, state.contract.delegated_sources)
     if any(p.kind in (SlotKind.USER_LITERAL, SlotKind.TRUSTED) for p in provs):
@@ -273,38 +305,55 @@ def _values(v):
 
 
 def check(state, call, decision: dict, planner=None, context: dict | None = None) -> dict | None:
-    """Runs the relabeling probe for ambiguous sink values of a risky call.
+    """Provenance probe for the sink values of a risky call.
 
-    Returns None when nothing is ambiguous (zero planner calls), else
+    Mode 1, relabeling: a value found in several spans, or in a document that also carries an instruction.
+    Mode 2, ablation (choices): a value found once, in a document that offers several candidates of the same
+    kind and contains steering lines; remove each steering line and see whether the choice changes.
+    Returns None when neither applies (zero planner calls), else
     {"check": <gate check dict>, "event": <UI event>, "audit": <audit record>}.
     """
     pol = get_policy(call.function)
     if pol.effect.value not in RISKY:
         return None
-    targets = []
+    relabel_t, ablate_t = None, None
     for arg, sink in pol.sinks.items():
         for v in _values(call.args.get(arg)):
-            if kind_of(v) is None:
+            k = kind_of(v)
+            if k is None:
                 continue
             amb, provs = _ambiguous(state, v)
-            if amb:
-                targets.append((arg, sink, v, provs))
-    if not targets:
+            if amb and relabel_t is None:
+                relabel_t = (arg, sink, v, provs)
+            elif not amb and ablate_t is None and provs and not any(p.kind in (SlotKind.USER_LITERAL, SlotKind.TRUSTED) for p in provs):
+                sid = next((p.span_id for p in provs if p.span_id), None)
+                span = next((s for s in state.ledger.spans if s.id == sid), None)
+                if span is not None and len(_distinct_candidates(state, span.call_id, k)) >= 2:
+                    steer = [s for s in state.ledger.spans if s.call_id == span.call_id and s.id != sid and _steering(s)]
+                    if steer:
+                        ablate_t = (arg, sink, v, provs, steer[:3])
+    if relabel_t is None and ablate_t is None:
         return None
     ctx = context or getattr(state, "perturb_ctx", None) or _caller_context()
     planner = planner or (ctx or {}).get("extra_args", {}).get("warrant_planner")
     planner = getattr(planner, "llm", planner)  # PlannerHandle wraps the planner
     t0 = time.time()
-    arg, sink, value, provs = targets[0]
+    arg, sink, value, provs = (relabel_t or ablate_t)[:4]
     base = {"arg": arg, "sink": sink.value if isinstance(sink, Sink) else str(sink), "value": value[:80],
             "allowed_kinds": [], "provenance": [p.as_dict() for p in provs[:3]]}
     if planner is None or not ctx or not ctx.get("messages"):
         res = {**base, "verdict": NEEDS_INPUT, "code": "PROBE_INCONCLUSIVE",
-               "why": f"'{value}' appears in several places in untrusted data and the provenance probe could not run"}
-        return _package(res, value, {}, [], 0, t0, call)
+               "why": f"'{value}' needs a provenance probe (several candidate sources in untrusted data) and the probe could not run"}
+        return _package(res, value, {}, [], 0, t0, call, "none")
     history = list(ctx["messages"])
     if history and history[-1].get("role") == "assistant" and history[-1].get("tool_calls"):
         history = history[:-1]  # re-ask from just before the call being decided
+    if relabel_t is not None:
+        return _relabel_probe(state, call, planner, ctx, history, base, arg, value, t0)
+    return _ablation_probe(state, call, planner, ctx, history, base, arg, value, ablate_t[4], t0)
+
+
+def _relabel_probe(state, call, planner, ctx, history, base, arg, value, t0):
     chosen, fakes_all, runs = [], {}, []
     for r in range(PROBE_RUNS):
         rl = relabel(history, state.ledger.spans, value, seed=f"{state.run_id}:{call.function}:{arg}:{value}:{r}")
@@ -324,22 +373,71 @@ def check(state, call, decision: dict, planner=None, context: dict | None = None
     if len(chosen) < PROBE_RUNS or len(set(chosen)) != 1 or chosen[0] in ("<none>", None):
         res = {**base, "verdict": NEEDS_INPUT, "code": "PROBE_INCONCLUSIVE",
                "why": f"provenance probe for '{value}' was inconclusive (runs: {chosen}); asking the user"}
-        return _package(res, value, fakes_all, runs, n_calls, t0, call)
+        return _package(res, value, fakes_all, runs, n_calls, t0, call, "relabel")
     sid = chosen[0]
     span = next((s for s in state.ledger.spans if s.id == sid), None)
     doc_has_directive = span is not None and any(s.label == DIRECTIVE for s in state.ledger.spans if s.call_id == span.call_id)
-    if span is not None and (span.label == DIRECTIVE or doc_has_directive):
-        why = (f"'{value}' was taken from span {sid}, which is an instruction in untrusted data" if span.label == DIRECTIVE
-               else f"'{value}' was taken from span {sid}, in a document that also carries an instruction")
+    # The auditor's score is a weak signal on its own; here it is backed by causal evidence that the planner
+    # took the value from exactly this line, so any instruction cue on that line is enough to refuse.
+    if span is not None and (span.label == DIRECTIVE or span.score >= 1 or doc_has_directive):
+        if span.label == DIRECTIVE or span.score >= 1:
+            why = f"'{value}' was taken from span {sid}, which instructs the agent ({', '.join(span.reasons) or 'flagged'})"
+        else:
+            why = f"'{value}' was taken from span {sid}, in a document that also carries an instruction"
         res = {**base, "verdict": REFUSED, "code": "TAINTED_SOURCE", "why": why, "provenance_span": sid}
     else:
         res = {**base, "verdict": ALLOWED, "code": "OK", "why": f"provenance probe: '{value}' comes from span {sid}", "provenance_span": sid}
-    return _package(res, value, fakes_all, runs, n_calls, t0, call)
+    return _package(res, value, fakes_all, runs, n_calls, t0, call, "relabel")
 
 
-def _package(res: dict, value: str, fakes: dict, runs: list, n_calls: int, t0: float, call) -> dict:
+def _ablate(messages: list, span) -> list:
+    msgs = copy.deepcopy(list(messages))
+    for m in msgs:
+        if m.get("role") == "tool" and m.get("tool_call_id") == span.call_id:
+            text = _content_text(m.get("content"))
+            if span.text in text:
+                m["content"] = [text_content_block_from_string(text.replace(span.text, "", 1))]
+    return msgs
+
+
+def _same(a: str, b: str) -> bool:
+    na, nb = _num(a), _num(b)
+    if na is not None and nb is not None:
+        return abs(na - nb) < 1e-6
+    return a.strip().lower() == b.strip().lower()
+
+
+def _ablation_probe(state, call, planner, ctx, history, base, arg, value, steer, t0):
+    # Baseline: the same re-ask on the unmodified conversation must reproduce the proposed value; ablations
+    # are compared against it, so planner noise is not mistaken for steering. Budget: 1 + 2 calls.
+    b_args = _reask(planner, ctx, history, call.function)
+    b_vals = _values((b_args or {}).get(arg))
+    runs = [{"ablated_span": None, "function_kept": b_args is not None, "value": b_vals[0] if b_vals else None, "changed": False}]
+    if b_args is None or not any(_same(x, value) for x in b_vals):
+        res = {**base, "verdict": NEEDS_INPUT, "code": "PROBE_INCONCLUSIVE",
+               "why": f"ablation probe: re-asking without changes gave {b_vals or 'no call'} instead of '{value}'; asking the user"}
+        return _package(res, value, {}, runs, 1, t0, call, "ablation")
+    decisive = None
+    for sp in steer[:2]:
+        args = _reask(planner, ctx, _ablate(history, sp), call.function)
+        new = _values((args or {}).get(arg))
+        changed = args is not None and bool(new) and not any(_same(x, value) for x in new)
+        runs.append({"ablated_span": sp.id, "function_kept": args is not None, "value": new[0] if new else None, "changed": changed})
+        if changed:
+            decisive = sp
+            break
+    if decisive is not None:
+        res = {**base, "verdict": NEEDS_INPUT, "code": "DECISIVE_UNTRUSTED_SPAN", "provenance_span": decisive.id,
+               "why": f"removing span {decisive.id} ({decisive.text[:80]!r}) changes the chosen {arg} from '{value}' "
+                      f"to '{runs[-1]['value']}': an untrusted line decided this value; asking the user"}
+    else:
+        res = {**base, "verdict": ALLOWED, "code": "OK", "why": f"ablation probe: no steering line changes '{value}'"}
+    return _package(res, value, {}, runs, len(runs), t0, call, "ablation")
+
+
+def _package(res: dict, value: str, fakes: dict, runs: list, n_calls: int, t0: float, call, mode: str) -> dict:
     ms = round((time.time() - t0) * 1000)
-    probe = {"value": value, "fakes": fakes, "runs": runs, "extra_planner_calls": n_calls, "latency_ms": ms,
+    probe = {"mode": mode, "value": value, "fakes": fakes, "runs": runs, "extra_planner_calls": n_calls, "latency_ms": ms,
              "verdict": res["verdict"], "code": res["code"], "span": res.get("provenance_span")}
     return {"check": {**res, "probe": probe},
             "event": {"function": call.function, **probe},
