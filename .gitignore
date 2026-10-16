@@ -17,3 +17,4 @@ secrets/
 credentials.json
 token.json
 *_token.json
+sessions/

@@ -6,10 +6,13 @@
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const icon = (id) => `<svg aria-hidden="true"><use href="/static/workspace/sprite.svg#${id}"/></svg>`;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (S.fast ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
   const now = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-  const S = { sid: null, world: null, tab: "emails", busy: false, turn: 0, conns: {}, hasKey: true };
+  const S = { sid: null, world: null, tab: "emails", busy: false, turn: 0, conns: {}, hasKey: true, fast: false };
+  const SID_KEY = "warrantWorkspaceSid";
+  const store = { get: () => { try { return localStorage.getItem(SID_KEY); } catch (e) { return null; } },
+                  set: (v) => { try { v ? localStorage.setItem(SID_KEY, v) : localStorage.removeItem(SID_KEY); } catch (e) {} } };
 
   /* ---------------- vocabulary ---------------- */
   const SOURCES = [
@@ -74,9 +77,36 @@
     if (!r.ok) throw new Error(d.detail || r.statusText);
     return d;
   }
+  // Restore the last session (workspace, agent memory and the whole conversation) after a reload or restart.
+  async function restoreSession(sid) {
+    S.sid = sid;
+    const h = await api(`history?sid=${sid}`);
+    S.hasKey = h.has_key; S.conns = h.connections || {};
+    $("#modelLine").textContent = `Model: ${h.planner_model}${h.has_key ? "" : " · no API key in .env"}`;
+    renderConns();
+    await refreshWorld();
+    if (!h.history.length) return;
+    $("#hero").hidden = true;
+    S.fast = true;
+    try {
+      for (const rec of h.history) {
+        const T = newTurn(rec.prompt, rec.compare, rec.gullible);
+        for (const ev of rec.events) await handle(T, ev);
+        for (const a of rec.approvals || []) {
+          const t = T.tickets[`warrant:${a.id}`];
+          if (t) { applyDecision(t, a.approved, { ok: true, effects: [] }); }
+        }
+        $$(".approve", T.el).forEach((b) => { if (!h.pending.includes(b.dataset.id)) b.remove(); });
+        finishTurn(T);
+      }
+    } finally { S.fast = false; }
+    $("#turns").lastElementChild?.scrollIntoView({ block: "start" });
+    status("Restored your last session.");
+  }
   async function newSession() {
     const d = await api("session", {});
     S.sid = d.sid; S.hasKey = d.has_key; S.conns = d.connections || {};
+    store.set(S.sid);
     $("#modelLine").textContent = `Model: ${d.planner_model}${d.has_key ? "" : " · no API key in .env"}`;
     renderConns();
     await refreshWorld();
@@ -187,12 +217,11 @@
     el.className = "turn";
     el.innerHTML = `<div class="ask"><span class="who">AM</span><div class="txt">${esc(text)}</div></div>
       <div class="contract" hidden></div>
-      ${gullible ? `<div class="stress">Worst case on: once the poisoned data is read, both assistants try what the hidden instruction asks. Only the checkpoint differs.</div>` : ""}
       <div class="lanes ${compare ? "" : "one"}">
         ${compare ? laneShell("undefended") : ""}${laneShell("warrant")}
       </div>`;
     $("#turns").appendChild(el);
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!S.fast) el.scrollIntoView({ behavior: "smooth", block: "start" });
     return { id, el, compare, lanes: {}, tickets: {}, effects: {}, stats: { warrant: { held: 0, ask: 0, ok: 0, stopped: [] }, undefended: { sent: 0 } }, queue: Promise.resolve() };
   }
   function laneShell(lane) {
@@ -428,6 +457,7 @@
     const foot = $(".tk-foot", t.el);
     const box = document.createElement("div");
     box.className = "approve";
+    box.dataset.id = String(ev.id);
     box.innerHTML = `<button class="btn brand" type="button" data-a="1">${icon("check")}Approve &amp; send</button><button class="btn ghost" type="button" data-a="0">Reject</button><span class="hint">nothing was sent yet</span>`;
     foot.prepend(box);
     if (S.busy) { $$("button", box).forEach((x) => x.disabled = true); $(".hint", box).textContent = "you can decide when both assistants finish"; }
@@ -437,7 +467,13 @@
       $(".hint", box).textContent = yes ? "sending…" : "";
       try {
         const r = await api("approve", { sid: S.sid, id: String(ev.id), approve: yes });
-        box.remove();
+        applyDecision(t, yes, r);
+        refreshWorld();
+      } catch (e) { $(".hint", box).textContent = e.message; $$("button", box).forEach((x) => x.disabled = false); }
+    });
+  }
+  function applyDecision(t, yes, r) {
+        $(".approve", t.el)?.remove();
         const tk = $(".tk", t.el), rt = $(".route", t.el), why = $(".why", t.el), cps = $$(".cp", rt);
         if (yes && r.ok) {
           rt.classList.remove("ask"); rt.classList.add("ok");
@@ -458,9 +494,6 @@
           why.className = "why bad"; why.innerHTML = `<b>You rejected it.</b> Nothing was sent.`;
           logLine("bad", `You rejected: ${summarise(t.ev)}`, "");
         }
-        refreshWorld();
-      } catch (e) { $(".hint", box).textContent = e.message; $$("button", box).forEach((x) => x.disabled = false); }
-    });
   }
   async function deliverUnprotected(T, t, ev) {
     const tk = $(".tk", t.el), rt = $(".route", t.el), why = $(".why", t.el), cps = $$(".cp", rt);
@@ -548,6 +581,7 @@
     document.addEventListener("click", (e) => { if (!e.target.closest(".menu")) $("#setPop").hidden = true; });
     $("#resetBtn").onclick = async () => {
       if (S.busy) return;
+      if (!confirm("Reset the workspace? This clears the conversation, the planted data, approvals and what the assistants did.")) return;
       await api("reset", { sid: S.sid });
       $("#turns").innerHTML = ""; $("#hero").hidden = false;
       $("#wPlain").innerHTML = $("#wSafe").innerHTML = `<li class="empty">Nothing yet.</li>`;
@@ -574,5 +608,6 @@
 
   wire();
   renderFlows();
-  newSession().catch((e) => status(`Could not start: ${e.message}`));
+  const saved = store.get();
+  (saved ? restoreSession(saved).catch(() => newSession()) : newSession()).catch((e) => status(`Could not start: ${e.message}`));
 })();

@@ -17,6 +17,7 @@ import html
 import io
 import json
 import queue
+import pickle
 import re
 import threading
 import time
@@ -40,7 +41,7 @@ from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
 from warrant import config
 from warrant.contract import ContractCompiler
 from warrant.events import Emitter
-from warrant.gate import AnswerGuard, EmittingToolsExecutor, WarrantGate, confirm_value
+from warrant.gate import CONFIRMED, AnswerGuard, EmittingToolsExecutor, WarrantGate, confirm_value, origin_key
 from warrant.llm import GroqLLM, content_to_text
 from warrant.pipeline import PlannerHandle
 
@@ -108,15 +109,57 @@ class Session:
         self.lanes = {"warrant": Lane(gmail.attach(world)), "undefended": Lane(gmail.attach(full_world()))}
         self.turns = 0
         self.pending: dict[str, dict] = {}  # NEEDS_INPUT calls the user may approve, by call id
+        self.history: list[dict] = []       # every turn's prompt + events, so the UI can redraw it after a reload
 
 
 SESSIONS: dict[str, Session] = {}
 
 
+# ---------------------------------------------------------------- persistence
+# Sessions survive page reloads and server restarts: each one is pickled to sessions/<sid>.pkl after every
+# change (turn, added data, approval). Worlds, agent memory, ledger spans, origin stamps and the chat history
+# are kept; the lock and the live WarrantState are rebuilt.
+SESSIONS_DIR = config.ROOT / "sessions"
+
+
+def save_session(s: "Session") -> None:
+    try:
+        SESSIONS_DIR.mkdir(exist_ok=True)
+        lanes = {name: {"env": ln.env, "messages": ln.messages, "spans": ln.spans, "seq": ln.seq, "origins": ln.origins}
+                 for name, ln in s.lanes.items()}
+        blob = {"id": s.id, "lanes": lanes, "turns": s.turns, "pending": s.pending, "history": s.history}
+        tmp = SESSIONS_DIR / f"{s.id}.tmp"
+        tmp.write_bytes(pickle.dumps(blob))
+        tmp.replace(SESSIONS_DIR / f"{s.id}.pkl")
+    except Exception as exc:  # persistence must never break a turn
+        warnings.warn(f"could not save session {s.id}: {exc}")
+
+
+def load_session(sid: str) -> "Session | None":
+    path = SESSIONS_DIR / f"{sid}.pkl"
+    if not re.fullmatch(r"[0-9a-f]{12}", sid) or not path.exists():
+        return None
+    try:
+        blob = pickle.loads(path.read_bytes())
+    except Exception:
+        return None
+    s = Session.__new__(Session)
+    s.id, s.lock, s.turns, s.pending, s.history = blob["id"], threading.Lock(), blob["turns"], blob["pending"], blob["history"]
+    s.lanes = {}
+    for name, d in blob["lanes"].items():
+        ln = Lane(gmail.attach(d["env"]))
+        ln.messages, ln.spans, ln.seq, ln.origins = d["messages"], d["spans"], d["seq"], d["origins"]
+        s.lanes[name] = ln
+    return s
+
+
 def get_session(sid: str) -> Session:
     s = SESSIONS.get(sid)
     if s is None:
-        raise HTTPException(404, "session expired; reload the page")
+        s = load_session(sid)
+        if s is None:
+            raise HTTPException(404, "session expired; reload the page")
+        SESSIONS[sid] = s
     return s
 
 
@@ -387,6 +430,7 @@ def new_session() -> dict:
         SESSIONS.pop(next(iter(SESSIONS)))
     s = Session()
     SESSIONS[s.id] = s
+    save_session(s)
     env = s.lanes["warrant"].env
     return {"sid": s.id, "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
             "connections": {"gmail": "live" if gmail.is_live(env.inbox) else "simulated",
@@ -428,6 +472,7 @@ def add(item: AddItem) -> dict:
     if s.lock.locked():
         raise HTTPException(409, "the agent is busy; add data after this turn finishes")
     ids = {name: add_to_world(lane.env, item, content) for name, lane in s.lanes.items()}  # same data in both worlds
+    save_session(s)
     return {"id": ids["warrant"], "chars": len(content), "note": note}
 
 
@@ -437,6 +482,7 @@ def reset(body: dict) -> dict:
     if s.lock.locked():
         raise HTTPException(409, "the agent is busy")
     s.reset()
+    save_session(s)
     return {"ok": True}
 
 
@@ -464,6 +510,7 @@ def chat(turn: ChatTurn):
         raise HTTPException(409, "the agent is still answering the previous message")
     lanes = ["warrant", "undefended"] if turn.compare else ["warrant"]
     q: queue.Queue = queue.Queue()
+    record = {"prompt": turn.message.strip(), "compare": turn.compare, "gullible": turn.gullible, "events": []}
     pending = {"n": len(lanes)}
     guard = threading.Lock()
 
@@ -476,6 +523,8 @@ def chat(turn: ChatTurn):
                 last = pending["n"] == 0
             if last:
                 s.turns += 1
+                s.history.append(record)
+                save_session(s)
                 s.lock.release()
                 q.put({"type": "end"})
 
@@ -492,6 +541,8 @@ def chat(turn: ChatTurn):
             except queue.Empty:
                 yield ": keep-alive\n\n"
                 continue
+            if ev.get("type") not in ("stage", "end"):
+                record["events"].append(ev)
             yield _sse(ev)
             if ev.get("type") == "end":
                 break
@@ -514,6 +565,9 @@ def approve(body: Approval) -> dict:
     if call is None:
         raise HTTPException(404, "nothing is waiting for approval with that id")
     if not body.approve:
+        if s.history:
+            s.history[-1].setdefault("approvals", []).append({"id": body.id, "approved": False})
+        save_session(s)
         return {"ok": True, "approved": False, "effects": []}
     if not s.lock.acquire(blocking=False):
         s.pending[body.id] = call
@@ -523,12 +577,28 @@ def approve(body: Approval) -> dict:
         before = snapshot(lane.env)
         runtime = make_runtime(gmail.tools(PLAYGROUND_TOOLS))
         result, error = runtime.run_function(lane.env, call["function"], call["args"])
-        if not error and lane.state is not None:
+        if not error:
             for v in call.get("values") or []:
-                if v not in (None, ""):
+                if v in (None, ""):
+                    continue
+                if lane.state is not None:
                     confirm_value(lane.state, v, by="user (approve button)")
-            lane.origins = dict(lane.state.origins)
+                    lane.origins = dict(lane.state.origins)
+                else:  # session restored from disk: stamp directly
+                    lane.origins[origin_key(v)] = CONFIRMED
+            if s.history:
+                s.history[-1].setdefault("approvals", []).append({"id": body.id, "approved": True, "effects": side_effects(before, lane.env)})
+        save_session(s)
         return {"ok": not error, "approved": True, "error": error, "result": str(result)[:400] if result is not None else "",
                 "effects": side_effects(before, lane.env)}
     finally:
         s.lock.release()
+
+
+@router.get("/history")
+def history(sid: str) -> dict:
+    s = get_session(sid)
+    env = s.lanes["warrant"].env
+    return {"history": s.history, "pending": list(s.pending), "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
+            "connections": {"gmail": "live" if gmail.is_live(env.inbox) else "simulated",
+                            "slack": "live" if env.slack.live else "simulated", "bank": "simulated", "drive": "simulated"}}
