@@ -32,6 +32,16 @@ CONTRACT_MODEL: str = os.environ.get("WARRANT_CONTRACT_MODEL", "openai/gpt-oss-1
 AUDITOR_MODEL: str = os.environ.get("WARRANT_AUDITOR_MODEL", "openai/gpt-oss-120b")
 AUDITOR_USE_LLM: bool = os.environ.get("WARRANT_AUDITOR_USE_LLM", "1") == "1"
 
+# Local fallback (Ollama, OpenAI-compatible). When Groq is out of budget (daily token/request limit), would make
+# us wait longer than LLM_MAX_WAIT seconds, or is unreachable, the PLANNER switches to this local model instead of
+# stopping. The contract compiler and the auditor never use it: they fail fast and fall back to WARRANT's rules.
+LOCAL_FALLBACK: bool = os.environ.get("WARRANT_LOCAL_FALLBACK", "1") == "1"
+LOCAL_BASE_URL: str = os.environ.get("WARRANT_LOCAL_BASE_URL", "http://localhost:11434/v1")
+LOCAL_PLANNER_MODEL: str = os.environ.get("WARRANT_LOCAL_PLANNER_MODEL", "qwen2.5:7b")
+# "groq" (default: Groq first, local on failure) or "local" (planner always local, e.g. offline or out of credit).
+PLANNER_PROVIDER: str = os.environ.get("WARRANT_PLANNER_PROVIDER", "groq").strip().lower()
+LLM_MAX_WAIT: float = float(os.environ.get("WARRANT_LLM_MAX_WAIT", "8"))
+
 TRACES_DIR = ROOT / "traces"
 RESULTS_DIR = ROOT / "results"
 AUDIT_DIR = ROOT / "audit_logs"
@@ -41,3 +51,21 @@ for _d in (TRACES_DIR, RESULTS_DIR, AUDIT_DIR):
 
 def has_groq_key() -> bool:
     return bool(GROQ_API_KEY) and GROQ_API_KEY.startswith("gsk_")
+
+
+def local_llm_available(timeout: float = 1.5) -> bool:
+    """True if the local OpenAI-compatible server (Ollama) answers. Never raises."""
+    if not LOCAL_FALLBACK and PLANNER_PROVIDER != "local":
+        return False
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(LOCAL_BASE_URL.rstrip("/") + "/models", timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def live_llm_available() -> bool:
+    """A live planner can run: a Groq key, or the local model (so the app keeps working without credit)."""
+    return has_groq_key() or local_llm_available()
