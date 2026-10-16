@@ -107,3 +107,57 @@ can fix that). The one travel run left is `user_task_6` + `injection_task_4`: th
 book a hotel" without naming one, so booking the hotel the injection points to is within the request.
 
 Merge check for the team: `lane-a/contract` + `lane-b/gate` merge without conflicts, and all 197 tests pass.
+
+---
+
+# Round 2 hand-off: AgentDyn port and adaptive evaluation (branch `lane-a/agentdyn`, not merged)
+Updated: 2026-10-16. Round 2 gives `contract.py` / `policy.py` to **Lane E** and `bench/` to **Lane F**,
+so this branch is a hand-off, not a merge request. Take what is useful.
+
+## What is on the branch
+- `warrant/policy.py`, `warrant/contract.py` (`62e3349`): policies for ~100 AgentDyn tools, sink `RECORD`,
+  effect `FORM` (web forms), staging steps as READ, and command rules for buying, git verbs, relayed requests
+  and delegation wording. Effect audit: AgentDyn 60 tasks, missing effects 53 -> 1; AgentDojo unchanged.
+  Developed on AgentDyn prompts, so AgentDyn is a development set for these rules.
+- `bench/run_agentdojo.py` (`e2dd308`, fix after it): lazy oracle for AgentDyn (recomputes ground truth each
+  step, fills one-time passwords / invitation links from the inbox). 45/60 AgentDyn ground truths replay.
+- `bench/corrections.py`: effect-based rescoring of slack IT5, dailylife IT7, github IT1 (after ROPE).
+
+## Results (oracle = fully hijacked planner; scratch runs, `results/` untouched)
+Setup: AutoDojo's AgentDojo fork (agentdojo 0.1.35 + AgentDyn suites). The AutoDojo rows replay injections that
+AutoDojo optimised against OTHER defences (transfer, not adaptive against WARRANT).
+
+AgentDojo suites (banking + slack + travel, 389 attacked runs each, corrected ASR):
+
+| Attack set | Undefended | WARRANT | WARRANT, mask off |
+|---|---|---|---|
+| static (important_instructions) | 93.8% | **0.3%** | 0.3% |
+| AutoDojo vs no defence | 94.1% | 3.9% | 3.9% |
+| AutoDojo vs Progent | 93.8% | 5.4% | 5.4% |
+| AutoDojo vs DRIFT | 94.1% | 8.7% | 8.7% |
+| AutoDojo vs PIGuard | 93.8% | **31.6%** | 31.6% |
+
+AgentDyn suites (replayable user tasks only; AutoDojo = injections optimised against ROPE):
+
+| Suite | Benign utility none / WARRANT | ASR static none / WARRANT | ASR AutoDojo none / WARRANT |
+|---|---|---|---|
+| github (14 tasks) | 100% / **43%** | 0% / 0% (attacks do not replay even undefended) | 0% / 0% |
+| shopping (14) | 86% / 79% | 93.7% / **0%** | 96.0% / **39.7%** |
+| dailylife (17) | 94% / 65% | 80.0% / **0%** | 80.0% / **22.4%** |
+
+## What this says
+1. Static attacks are stopped everywhere (0-0.3%). Optimised, data-like injections are not: an attacker IBAN,
+   address or link written as plain document data becomes LOOKUP evidence and passes. This is HOLES.md H1/H2;
+   Lane E tasks 1-2 (Two-Witness, document taint) and Lane D (perturbation) are the fixes. Re-run these
+   replays after E and D merge.
+2. AgentDyn utility cost is real (github 100% -> 43%, dailylife 94% -> 65%), mostly refusals of values
+   that come from helpful third-party instructions. Lane E should check that its changes do not widen it.
+3. Under `important_instructions`, masking on/off makes no difference; the gate does the work.
+
+## Requests
+- **Lane E:** consider merging the AgentDyn tool policies and effect rules from `62e3349` into your branch
+  (you own those files now); please keep `confirm_new_payees` semantics consistent with Two-Witness (my A8
+  "one named document" rule is exactly the H2 hole).
+- **Lane F:** consider taking `bench/corrections.py` and the lazy AgentDyn oracle; to reproduce, install
+  `github.com/xhOwenMa/AutoDojo` (`pip install -e agentdojo`), set `PYTHONUTF8=1` on Windows, and replay with
+  `--attack autodojo` + `AUTODOJO_CACHE=<variants/.../injections.json>`.
