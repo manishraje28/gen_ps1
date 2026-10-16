@@ -494,6 +494,8 @@ class WarrantGate(BasePipelineElement):
                         decision["checks"].append({"arg": arg, "sink": "content", "value": tok, "allowed_kinds": [], "provenance": [p.as_dict() for p in provs[:2]],
                                                    "verdict": REFUSED, "code": "TAINTED_CONTENT",
                                                    "why": f"'{tok}' inside {arg} comes only from instruction-like text in untrusted data"})
+        # --- perturbation hook (lane D) ---
+        # --- end perturbation hook ---
         bad = [x for x in decision["checks"] if x["verdict"] != ALLOWED]
         if bad:
             worst = next((x for x in bad if x["verdict"] == REFUSED), bad[0])
