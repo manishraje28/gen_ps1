@@ -89,7 +89,9 @@ def test_image_upload_is_rejected_not_dropped():
     assert r.status_code == 400 and "OCR" in r.json()["detail"]
 
 
-def test_chat_needs_key():
+def test_chat_needs_key(monkeypatch):
+    # No Groq key and no local model: the playground must refuse instead of hanging.
+    monkeypatch.setattr(pg.config, "live_llm_available", lambda: False)
     r = client.post("/api/play/chat", json={"sid": _sid(), "message": "hi"})
     assert r.status_code == 400
 

@@ -320,7 +320,7 @@ def new_session() -> dict:
         SESSIONS.pop(next(iter(SESSIONS)))
     s = Session()
     SESSIONS[s.id] = s
-    return {"sid": s.id, "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL}
+    return {"sid": s.id, "has_key": config.live_llm_available(), "planner_model": config.PLANNER_MODEL}
 
 
 @router.get("/world")
@@ -384,8 +384,8 @@ def _sse(obj: dict) -> str:
 @router.post("/chat")
 def chat(turn: ChatTurn):
     s = get_session(turn.sid)
-    if not config.has_groq_key():
-        raise HTTPException(400, "The playground needs a Groq key in .env (it runs a real LLM agent).")
+    if not config.live_llm_available():
+        raise HTTPException(400, "The playground needs a live model: a Groq key in .env, or the local model (Ollama) running.")
     if not turn.message.strip():
         raise HTTPException(400, "empty message")
     if not s.lock.acquire(blocking=False):
