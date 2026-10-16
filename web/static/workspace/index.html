@@ -18,9 +18,9 @@
   <div class="top-right">
     <button class="iconbtn bell" id="bellBtn" type="button" aria-label="Waiting for your approval"><svg><use href="/static/workspace/sprite.svg#bell"/></svg><i id="bellDot" hidden></i></button>
     <div class="menu">
-      <button class="avatar" id="setBtn" type="button" aria-expanded="false" title="Settings">AM</button>
+      <button class="avatar" id="setBtn" type="button" aria-expanded="false" title="Settings"></button>
       <div class="menu-pop" id="setPop" hidden>
-        <div class="pop-user"><b>Arjun Mehta</b><span class="muted">arjun@acme.test · demo account</span></div>
+        <div class="pop-user"><b id="meName"></b><span class="muted" id="meEmail"></span></div>
         <hr class="perf">
         <label class="opt"><input type="checkbox" id="optCompare" checked><span><b>Compare with an unprotected assistant</b><i>Every task also runs without WARRANT, side by side.</i></span></label>
         <label class="opt"><input type="checkbox" id="optGullible" checked><span><b>Worst case for attacks</b><i>When an attack task reads the poisoned data, both assistants try what the hidden instruction asks. Only the checkpoint differs.</i></span></label>
@@ -90,6 +90,6 @@
 
 <div class="toast" id="toast" hidden></div>
 <script src="/static/workspace/flows.js?v=1"></script>
-<script src="/static/workspace/app.js?v=9"></script>
+<script src="/static/workspace/app.js?v=10"></script>
 </body>
 </html>

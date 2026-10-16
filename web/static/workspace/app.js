@@ -2,7 +2,7 @@
    Pages: Home, Inbox, Tasks, Task (Plan / Progress / Results), Apps, Drive, Slack, Bank, Contacts, Calendar,
    Sent, Attack lab. Every task runs twice on two copies of the same world (ordinary vs WARRANT); each outgoing
    action is a ticket that travels through WARRANT's checkpoints and is stamped where it was stopped. */
-(() => {
+(async () => {
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -138,7 +138,7 @@
     const flagged = (w.emails || []).filter((e) => e.suspicious);
     const quick = [DAILY.find((d) => d.icon === "inbox"), DAILY[0], DAILY.find((d) => d.icon === "hash"), DAILY.find((d) => d.icon === "calendar")].filter(Boolean);
     P.innerHTML = `
-      <div class="dhead"><p class="greet">Good ${part}, Arjun</p><time>${new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "short", year: "numeric" })}</time></div>
+      <div class="dhead"><p class="greet">Good ${part}${S.user ? `, ${esc(S.user.name.split(" ")[0])}` : ""}</p><time>${new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "short", year: "numeric" })}</time></div>
       <div class="stats">
         ${stat("gmail", "", (w.emails || []).length, "Emails in your inbox", flagged.length ? `${flagged.length} flagged` : "Summarise", flagged.length ? "#/inbox/attention" : "do:inbox")}
         ${stat("slack", "", (w.slack || []).length, "Slack updates", "View", "#/slack")}
@@ -415,7 +415,7 @@
   }
   function renderChat() { renderRail(); }
   function renderRail() {
-    const accts = { gmail: "arjun@acme.test", slack: "warrant-demo workspace", bank: "IN07 ACME · demo bank", drive: `${(S.world?.files || []).length} files · demo` };
+    const accts = { gmail: S.conns.gmail === "live" ? "your real Gmail inbox" : (S.user?.email || "demo inbox"), slack: "warrant-demo workspace", bank: "IN07 ACME · demo bank", drive: `${(S.world?.files || []).length} files · demo` };
     $("#railApps").innerHTML = SVC.map(([k, l, ic]) => `<div class="rapp"><span class="app-ico">${logo(k)}</span><div><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(accts[k])}</span></div><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : "Demo"}</span></div>`).join("");
     $("#railQuick").innerHTML = DAILY.slice(0, 5).map((f, i) => `<button type="button" data-i="${i}">${icon(f.icon)}${esc(f.title)}</button>`).join("")
       + `<button type="button" class="more" id="railMore"><span>${icon("bolt")}Try an attack</span>${icon("arrow")}</button>`;
@@ -764,6 +764,18 @@
   }
 
   wire();
+  async function loadMe() {
+    try {
+      const d = await api("me");
+      S.user = d.user; S.demo = d.demo;
+      const initials = (d.user.name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+      $("#setBtn").textContent = initials;
+      $("#meName").textContent = d.user.name;
+      $("#meEmail").textContent = `${d.user.email}${d.demo ? " · demo profile" : ""}`;
+      if (!store.get() && d.last_session) store.set(d.last_session);
+    } catch (e) { $("#setBtn").textContent = "?"; }
+  }
+  await loadMe();
   const saved = store.get();
   (saved ? restoreSession(saved).catch(() => newSession()) : newSession())
     .then(() => { render(); renderChat(); })
