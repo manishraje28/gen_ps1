@@ -49,6 +49,11 @@ def content_to_text(content: Any) -> str:
     return "\n".join(p for p in parts if p)
 
 
+# Provider-specific data attached to a tool call that must be echoed back on the next request
+# (Gemini 3 "thought signatures" arrive as tool_call.extra_content). Keyed by tool-call id.
+_CALL_EXTRA: dict[str, Any] = {}
+
+
 def messages_to_openai(messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for m in messages:
@@ -59,14 +64,20 @@ def messages_to_openai(messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
             msg: dict[str, Any] = {"role": "assistant", "content": content_to_text(m.get("content")) or None}
             calls = m.get("tool_calls") or []
             if calls:
-                msg["tool_calls"] = [
-                    {
+                msg["tool_calls"] = []
+                for c in calls:
+                    tc: dict[str, Any] = {
                         "id": c.id or f"call_{uuid.uuid4().hex[:8]}",
                         "type": "function",
                         "function": {"name": c.function, "arguments": json.dumps(dict(c.args))},
                     }
-                    for c in calls
-                ]
+                    if c.id and c.id in _CALL_EXTRA:
+                        tc["extra_content"] = _CALL_EXTRA[c.id]
+                    elif "generativelanguage" in config.GROQ_BASE_URL:
+                        # A call the model did not produce itself (scripted / replayed): Gemini's documented
+                        # placeholder lets the conversation continue without a real signature.
+                        tc["extra_content"] = {"google": {"thought_signature": "skip_thought_signature_validator"}}
+                    msg["tool_calls"].append(tc)
                 if msg["content"] is None:
                     msg["content"] = ""
             out.append(msg)
@@ -199,7 +210,11 @@ class GroqLLM(BasePipelineElement):
                     args = json.loads(tc.function.arguments or "{}") or {}
                 except json.JSONDecodeError:
                     args = {}
-                calls.append(FunctionCall(function=tc.function.name, args=args, id=tc.id))
+                call_id = tc.id or f"call_{uuid.uuid4().hex[:8]}"
+                extra = (getattr(tc, "model_extra", None) or {}).get("extra_content")
+                if extra:
+                    _CALL_EXTRA[call_id] = extra
+                calls.append(FunctionCall(function=tc.function.name, args=args, id=call_id))
         else:
             calls = _parse_failed_generation(failed or "")
             if not calls:
