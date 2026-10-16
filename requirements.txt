@@ -6,3 +6,5 @@ pydantic>=2.6
 PyYAML>=6.0
 pytest>=8.0
 pypdf>=4.0
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
