@@ -119,7 +119,7 @@ class OracleHijackedPlanner(BasePipelineElement):
 
     # AgentDyn ground truths carry placeholders for values that only arrive by email mid-run. Fill
     # them from the newest tool output, as an agent reading its inbox would.
-    _OTP_RE = re.compile(r"OTP[^0-9]{0,40}?(\d{4,8})")
+    _OTP_RE = re.compile(r"OTP is:\s*(\d{6})\b")  # AgentDyn mails "... OTP is: 123456" (6 random digits)
     _LINK_RE = re.compile(r"(?:https?://|www\.)\S*invit\S*", re.I)
 
     def _fill_placeholders(self, call, messages):
