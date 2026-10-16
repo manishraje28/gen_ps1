@@ -39,8 +39,9 @@ from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
 from warrant import config
 from warrant.contract import ContractCompiler
 from warrant.events import Emitter
-from warrant.gate import EmittingToolsExecutor, WarrantGate
+from warrant.gate import AnswerGuard, EmittingToolsExecutor, WarrantGate
 from warrant.llm import GroqLLM, content_to_text
+from warrant.pipeline import PlannerHandle
 
 router = APIRouter(prefix="/api/play")
 
@@ -288,8 +289,9 @@ def run_turn_lane(sess: Session, lane_name: str, query: str, mask: bool, sink) -
     llm = GroqLLM(emit=emit)
     head: list[BasePipelineElement] = [] if lane.messages else [SystemMessage(PLAY_SYSTEM)]
     if lane_name == "warrant":
-        elems = head + [InitQuery(), ContractCompiler(use_llm=True, emit=emit, internal_domains=INTERNAL_DOMAINS), CarryLedger(lane), llm,
-                        ToolsExecutionLoop([WarrantGate(emit=emit, mask_directives=mask, output_formatter=format_output), llm], max_iters=12)]
+        elems = head + [InitQuery(), ContractCompiler(use_llm=True, emit=emit, internal_domains=INTERNAL_DOMAINS), CarryLedger(lane), PlannerHandle(llm), llm,
+                        ToolsExecutionLoop([WarrantGate(emit=emit, mask_directives=mask, output_formatter=format_output), llm], max_iters=12),
+                        AnswerGuard(emit=emit)]
     else:
         elems = head + [InitQuery(), llm, ToolsExecutionLoop([EmittingToolsExecutor(emit, format_output), llm], max_iters=12)]
     pipe = AgentPipeline(elems)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import warnings
@@ -43,7 +44,8 @@ from agentdojo.types import ChatAssistantMessage, text_content_block_from_string
 from warrant import config  # noqa: E402
 from warrant.auditor import audit_output, mask_text  # noqa: E402
 from warrant.contract import ContractCompiler  # noqa: E402
-from warrant.gate import WarrantGate  # noqa: E402
+from warrant.gate import AnswerGuard, WarrantGate  # noqa: E402
+from warrant.pipeline import PlannerHandle  # noqa: E402
 from warrant.llm import USAGE, GroqLLM, content_to_text  # noqa: E402
 
 warnings.filterwarnings("ignore")
@@ -144,7 +146,8 @@ def build(defense: str, planner: str, model: str, contract_llm: bool) -> tuple[A
         audit_dir = config.RESULTS_DIR / "bench_audit"
         audit_dir.mkdir(parents=True, exist_ok=True)
         gate = WarrantGate(mask_directives=defense == "warrant", auditor_llm=contract_llm, audit_dir=audit_dir)
-        elems = [SystemMessage(sysmsg), InitQuery(), ContractCompiler(use_llm=contract_llm), llm, ToolsExecutionLoop([gate, llm])]
+        elems = [SystemMessage(sysmsg), InitQuery(), ContractCompiler(use_llm=contract_llm), PlannerHandle(llm), llm,
+                 ToolsExecutionLoop([gate, llm]), AnswerGuard(audit_dir=audit_dir)]
     else:
         raise ValueError(defense)
     pipe = AgentPipeline(elems)
@@ -238,7 +241,10 @@ def main() -> None:
     ap.add_argument("--attack", default="important_instructions")
     ap.add_argument("--model", default=config.PLANNER_MODEL)
     ap.add_argument("--force", action="store_true", help="re-run tasks that already have logs")
+    ap.add_argument("--perturb", action="store_true", help="enable Lane D's perturbation probe (sets WARRANT_PERTURB=1)")
     args = ap.parse_args()
+    if args.perturb:
+        os.environ["WARRANT_PERTURB"] = "1"
     if args.planner == "groq" and not config.has_groq_key():
         sys.exit("Set GROQ_API_KEY in .env first.")
     if args.planner == "oracle" and args.defenses == "none,prompt,detector,warrant_nomask,warrant":
