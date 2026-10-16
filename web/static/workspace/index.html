@@ -6,7 +6,7 @@
   <title>WARRANT Workspace</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/workspace/ws.css?v=2">
+  <link rel="stylesheet" href="/static/workspace/ws.css?v=4">
 </head>
 <body>
 <header class="bar">
@@ -22,6 +22,7 @@
       <button class="iconbtn" id="setBtn" type="button" aria-expanded="false"><svg><use href="/static/workspace/sprite.svg#sliders"/></svg><span class="hide-sm">Settings</span></button>
       <div class="menu-pop" id="setPop" hidden>
         <label class="opt"><input type="checkbox" id="optCompare" checked><span><b>Show the ordinary assistant</b><i>Run the same request with no protection, side by side.</i></span></label>
+        <label class="opt"><input type="checkbox" id="optGullible" checked><span><b>Worst case: the assistant obeys hidden instructions</b><i>For attack flows, both assistants attempt exactly what the hidden instruction asks once they read it (like the benchmark's fully hijacked planner). Only WARRANT's checkpoint differs.</i></span></label>
         <label class="opt"><input type="checkbox" id="optMask" checked><span><b>Hide instructions found in data</b><i>Off = stress test: the assistant reads the raw injection and only the checkpoint stands in the way.</i></span></label>
         <hr class="perf">
         <button class="quiet" id="resetBtn" type="button">Reset the workspace</button>
@@ -101,6 +102,6 @@
   </form>
 </div>
 
-<script src="/static/workspace/ws.js?v=3"></script>
+<script src="/static/workspace/ws.js?v=6"></script>
 </body>
 </html>

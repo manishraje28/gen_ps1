@@ -326,3 +326,19 @@ hr.perf { border: 0; border-top: 1px dashed var(--line-2); margin: 8px 0 10px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
 }
+
+/* stress-test banner, approval buttons, held list */
+.stress { display: flex; align-items: center; gap: 8px; margin: 0 0 12px 42px; font-size: 12.5px; color: var(--amber); }
+.stress::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+.tk-foot { gap: 10px; justify-content: space-between; flex-wrap: wrap; }
+.tk-foot .stamp { margin-left: auto; }
+.approve { display: flex; gap: 8px; align-items: center; animation: rise .25s var(--ease); }
+.approve .btn { padding: 6px 11px; font-size: 13px; }
+.approve .btn.ghost { background: var(--card); color: var(--ink); border-color: var(--line-2); }
+.approve .btn.ghost:hover { border-color: var(--ink); }
+.approve .hint { font-size: 12px; color: var(--ink-3); }
+.oc li.held { color: var(--ok); }
+.oc li.held s { color: var(--ink-3); }
+.opt.off { opacity: .45; pointer-events: none; }
+.trig { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--marker); color: var(--ink); font-size: 12px; font-weight: 500; border-bottom: 1px solid var(--line-2); }
+.trig svg { width: 14px; height: 14px; }

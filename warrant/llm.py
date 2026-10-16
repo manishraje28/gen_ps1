@@ -73,6 +73,10 @@ def messages_to_openai(messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
                     }
                     if c.id and c.id in _CALL_EXTRA:
                         tc["extra_content"] = _CALL_EXTRA[c.id]
+                    elif "generativelanguage" in config.GROQ_BASE_URL:
+                        # A call the model did not produce itself (scripted / replayed): Gemini's documented
+                        # placeholder lets the conversation continue without a real signature.
+                        tc["extra_content"] = {"google": {"thought_signature": "skip_thought_signature_validator"}}
                     msg["tool_calls"].append(tc)
                 if msg["content"] is None:
                     msg["content"] = ""
