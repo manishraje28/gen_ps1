@@ -68,10 +68,10 @@ class IntentContract(BaseModel):
     delegated_sources: list[str] = Field(default_factory=list)
     slots: list[Slot] = Field(default_factory=list)
     limits: Limits = Field(default_factory=Limits)
-    # Lane B enforces these in the gate: a payee IBAN or an external recipient that is neither
-    # typed by the user (USER_LITERAL) nor in the user's records (TRUSTED) needs the user's
-    # confirmation (NEEDS_INPUT: NEW_PAYEE / NEW_RECIPIENT), even when the data backs it (LOOKUP).
-    confirm_new_payees: bool = True
+    # True forces a confirmation (NEEDS_INPUT: NEW_PAYEE) for every payee IBAN that is neither typed by the
+    # user nor in their records, even one with a witness. Off by default: the gate's Two-Witness rule
+    # already asks the user about a new payee no independent principal vouches for (Lane E).
+    confirm_new_payees: bool = False
     # Off by default: users routinely send to addresses found in data they pointed at ("her e-mail is on
     # her website"). Injected addresses are already TAINTED and Lane B blocks a known contact whose
     # address differs from the records. Organisations that want a confirmation turn it on via OrgPolicy.
@@ -403,10 +403,10 @@ def compile_contract(
             internal_domains=sorted(set((internal_domains or []) + deleg_domains)),
         ),
         compiled_by=compiled_by,
-        # "Pay the bill in bill-dec.txt": the user vouched for exactly one named document, so a payee
-        # taken from it is what they asked for and needs no second confirmation. Lane B's records check
-        # still stops a known payee whose IBAN differs, and DIRECTIVE spans in that file stay tainted.
-        confirm_new_payees=not (Effect.PAY in effects and not delegated and len(set(FILE_RE.findall(query))) == 1),
+        # Lane E: a payee taken from a document is decided by the gate's Two-Witness rule (one independent
+        # principal must vouch for it), not by how many files the request names. Org policy can still
+        # force a confirmation for every new payee.
+        confirm_new_payees=False,
     )
     policy = org_policy if org_policy is not None else load_org_policy()
     if policy is not None:
