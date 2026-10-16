@@ -137,6 +137,7 @@ async function start() {
   if (S.es) S.es.close();
   const planner = $("#plannerSel").value, mask = $("#maskChk").checked ? 1 : 0;
   let url;
+  if (window.liveStart) window.liveStart();
   if (planner === "replay") {
     const tr = await fetch(`/api/traces?scenario=${S.sel.id}`).then((r) => r.json());
     if (!tr.length) { alert("No recorded run for this scenario yet. Run it live once first."); return; }
@@ -151,10 +152,10 @@ async function start() {
   S.es = es;
   es.onmessage = (m) => {
     const ev = JSON.parse(m.data);
-    if (ev.type === "end") { es.close(); $("#runBtn").disabled = false; return; }
+    if (ev.type === "end") { es.close(); $("#runBtn").disabled = false; if (window.liveHook) window.liveHook(ev); return; }
     try { handle(ev); } catch (e) { console.error(e, ev); }
   };
-  es.onerror = () => { es.close(); $("#runBtn").disabled = false; };
+  es.onerror = () => { es.close(); $("#runBtn").disabled = false; if (window.liveHook) window.liveHook({ type: "end" }); };
 }
 
 function setStatus(lane, st) {
@@ -194,6 +195,7 @@ function push(lane, html, cls = "") {
 }
 
 function handle(ev) {
+  if (window.liveHook) { try { window.liveHook(ev); } catch (e) { console.error(e); } }
   const lane = ev.lane;
   const W = lane === "warrant";
   switch (ev.type) {

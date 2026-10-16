@@ -6,7 +6,8 @@
   <title>WARRANT Demo</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=4">
+  <link rel="stylesheet" href="/static/styles.css?v=5">
+  <link rel="stylesheet" href="/static/product.css?v=5">
 </head>
 <body>
 <header class="topbar">
@@ -28,6 +29,50 @@
 <main>
   <!-- ======================= LIVE DEMO ======================= -->
   <section class="page active" id="page-demo">
+    <div class="hero2">
+      <div>
+        <div class="eyebrow">Runtime protection for AI agents</div>
+        <h2>Your agent reads everything.<br><span>WARRANT decides what it may do.</span></h2>
+        <p>Pick a task, switch protection off and on, and watch the same AI agent act on the same inbox and bank account.</p>
+      </div>
+      <div class="protect" id="protect">
+        <button data-mode="undefended"><span data-icon="alert"></span>No protection</button>
+        <button data-mode="warrant" class="on"><span data-icon="shield"></span>WARRANT protection</button>
+      </div>
+    </div>
+
+    <div class="stagegrid">
+      <div class="appwin">
+        <div class="appbar"><i></i><i></i><i></i><b>Acme assistant</b><span class="modetag" id="modeTag"></span></div>
+        <div class="chips" id="chips"></div>
+        <div class="convo" id="convo"><div class="cempty">Choose a task above and press <b>Run</b>.</div></div>
+        <div class="runbar">
+          <select id="plannerSel2" title="Which planner drives the agent"></select>
+          <label class="toggle light"><input type="checkbox" id="maskChk2" checked> Mask injected text</label>
+          <button class="peek" id="peekBtn2"><span data-icon="eye"></span>Poisoned source</button>
+          <button class="go" id="runBtn2"><span data-icon="play"></span>Run</button>
+        </div>
+      </div>
+      <div class="side">
+        <div class="flow2" id="flow2">
+          <div class="fnode" id="f-user"><span data-icon="user"></span><b>User</b></div><div class="fline" id="fl-1"><em></em></div>
+          <div class="fnode" id="f-agent"><span data-icon="brain"></span><b>AI agent</b></div><div class="fline" id="fl-2"><em></em></div>
+          <div class="fnode guard" id="f-gate"><span data-icon="shield"></span><b>WARRANT</b></div><div class="fline" id="fl-3"><em></em></div>
+          <div class="fnode" id="f-world"><span data-icon="globe"></span><b>Bank · Mail</b></div>
+        </div>
+        <div class="bank" id="bankCard">
+          <div class="bhead"><span>Arjun's account</span><span class="mono" id="bankIban">IN07 ACME 0000 5521 90</span></div>
+          <div class="bal"><small>Balance</small><b id="bankBal">INR 2,50,000.00</b></div>
+          <div class="txh">Today's activity</div>
+          <div class="txs" id="bankTx"><div class="txe">No money has moved.</div></div>
+        </div>
+        <div class="mailbox"><div class="txh">Sent from Arjun's mailbox</div><div class="txs" id="mailTx"><div class="txe">Nothing sent.</div></div></div>
+      </div>
+    </div>
+    <div id="outcome"></div>
+
+    <details class="hood" id="hood">
+      <summary><span data-icon="layers"></span>Under the hood: both agents side by side, contract, ledger and audit log</summary>
     <div class="picker" id="picker"></div>
 
     <div class="request">
@@ -81,6 +126,7 @@
         </div>
       </div>
     </div>
+    </details>
   </section>
 
   <!-- ======================= PLAYGROUND ======================= -->
@@ -166,7 +212,8 @@
   <div class="addrow"><button class="run" id="addGo">Add to workspace</button><button class="btn-ghost" id="addCancel" type="button">Cancel</button></div>
 </div></div>
 
-<script src="/static/app.js?v=4"></script>
-<script src="/static/playground.js?v=4"></script>
+<script src="/static/app.js?v=5"></script>
+<script src="/static/live.js?v=5"></script>
+<script src="/static/playground.js?v=5"></script>
 </body>
 </html>
