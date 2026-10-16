@@ -41,14 +41,16 @@ async def no_stale_ui(request, call_next):
 
 
 @app.get("/")
-def index():
-    return FileResponse(STATIC / "index.html")
-
-
 @app.get("/workspace")
 def workspace_page():
-    # The WARRANT workspace: one assistant over mail, Slack, bank and drive, ordinary vs protected, side by side.
+    # The main UI: the WARRANT workspace (one assistant over mail, Slack, bank and drive, ordinary vs protected).
     return FileResponse(STATIC / "workspace" / "index.html")
+
+
+@app.get("/classic")
+def classic():
+    # The original demo UI (live demo, playground, AgentDojo benchmark tab, how it works).
+    return FileResponse(STATIC / "index.html")
 
 
 @app.get("/api/config")
