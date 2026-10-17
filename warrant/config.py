@@ -40,4 +40,10 @@ for _d in (TRACES_DIR, RESULTS_DIR, AUDIT_DIR):
 
 
 def has_groq_key() -> bool:
-    return bool(GROQ_API_KEY) and GROQ_API_KEY.startswith("gsk_")
+    """True if an LLM key is configured. Groq keys must look like Groq keys ("gsk_"); for any other
+    OpenAI-compatible provider set in GROQ_BASE_URL (e.g. Gemini's endpoint) any non-empty key counts."""
+    if not GROQ_API_KEY or GROQ_API_KEY.startswith(("gsk_your", "your_")):
+        return False
+    if "api.groq.com" in GROQ_BASE_URL:
+        return GROQ_API_KEY.startswith("gsk_")
+    return True
