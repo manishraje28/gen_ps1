@@ -121,3 +121,15 @@ def test_rate_limit_wait_parsing():
     assert llm._rate_limit_wait(_rate_limit(DAILY)) == pytest.approx(273.455, abs=0.01)
     assert llm._rate_limit_wait(_rate_limit(MINUTE_SHORT)) == pytest.approx(0.48)
     assert llm._is_daily_limit(_rate_limit(DAILY)) and not llm._is_daily_limit(_rate_limit(MINUTE_LONG))
+
+
+def test_reasoning_effort_sent_only_when_set(clients, monkeypatch):
+    g, l, _ = clients()
+    seen = []
+    orig = g.chat.completions.create
+    g.chat.completions.create = lambda **kw: (seen.append(kw), orig(**kw))[1]
+    monkeypatch.setattr(config, "REASONING_EFFORT", "")
+    llm.chat_completion("m", MSGS, allow_local=True)
+    monkeypatch.setattr(config, "REASONING_EFFORT", "none")
+    llm.chat_completion("m", MSGS, allow_local=True)
+    assert "reasoning_effort" not in seen[0] and seen[1]["reasoning_effort"] == "none"

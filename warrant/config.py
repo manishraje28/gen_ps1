@@ -44,6 +44,9 @@ LOCAL_PLANNER_MODEL: str = os.environ.get("WARRANT_LOCAL_PLANNER_MODEL", "qwen2.
 # "groq" (default: Groq first, local on failure) or "local" (planner always local, e.g. offline or out of credit).
 PLANNER_PROVIDER: str = os.environ.get("WARRANT_PLANNER_PROVIDER", "groq").strip().lower()
 LLM_MAX_WAIT: float = float(os.environ.get("WARRANT_LLM_MAX_WAIT", "8"))
+# Sent as `reasoning_effort` on every LLM call when set. "none" turns off Qwen3's hidden thinking on Ollama
+# (qwen3:8b: ~4x fewer tokens per step, same tool calls). Groq gpt-oss accepts low|medium|high. Empty = not sent.
+REASONING_EFFORT: str = os.environ.get("WARRANT_REASONING_EFFORT", "").strip().lower()
 
 TRACES_DIR = ROOT / "traces"
 RESULTS_DIR = ROOT / "results"
