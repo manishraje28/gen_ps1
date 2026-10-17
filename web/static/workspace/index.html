@@ -78,6 +78,7 @@
     <label class="fld k-file" hidden>Folder<input id="plFolder" value="/uploads"></label>
     <label class="fld k-web" hidden>URL<input id="plUrl" placeholder="https://vendor.test/notice"></label>
     <label class="fld">Content<textarea id="plContent" rows="8" placeholder="Paste the content. Hide an instruction in it if you like."></textarea></label>
+    <label class="fld">Or upload a file (txt, pdf, docx, eml, image: png/jpg; images and scanned PDFs are read by the local vision model)<input type="file" id="plFile" accept=".txt,.pdf,.docx,.eml,.html,.htm,.csv,.json,.md,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff"></label>
     <div class="actions"><button class="btn" type="submit">Add</button><span class="muted" id="plStatus"></span></div>
   </form>
 </div>
@@ -92,6 +93,6 @@
 
 <div class="toast" id="toast" hidden></div>
 <script src="/static/workspace/flows.js?v=1"></script>
-<script src="/static/workspace/app.js?v=12"></script>
+<script src="/static/workspace/app.js?v=13"></script>
 </body>
 </html>

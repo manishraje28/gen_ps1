@@ -166,7 +166,7 @@ async function addData() {
     if (!r.ok) throw new Error(d.detail || r.statusText);
     $("#pgModal").classList.remove("open");
     ["#addSender", "#addSubject", "#addName", "#addUrl", "#addContent"].forEach((s) => $(s).value = "");
-    $("#addFile").value = ""; $("#addFileLbl").textContent = "Upload a file (txt, pdf, docx, eml, html, csv, json, md…)";
+    $("#addFile").value = ""; $("#addFileLbl").textContent = "Upload a file (txt, pdf, docx, eml, html, csv, json, md, png/jpg…)";
     PG.tab = { email: "emails", file: "files", web: "web" }[body.kind];
     await refreshWorld();
     sysNote(`Added ${body.kind} <code>${esc(d.id)}</code> (${d.chars.toLocaleString()} chars) to both agents' workspaces.${d.note ? ` <b>${esc(d.note)}</b>` : ""}`);

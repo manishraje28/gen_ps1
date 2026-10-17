@@ -393,16 +393,28 @@ _IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"}
 
 
 def extract_text(filename: str, data: bytes) -> str:
-    """Text from an uploaded file: PDF, DOCX, EML/HTML/any text format. Images and other
-    binaries are rejected (there is no OCR), never silently dropped."""
+    """Text from an uploaded file: PDF, DOCX, EML/HTML/any text format. Images and scanned PDFs are
+    transcribed by the local vision model (integrations/vision.py); without it they are rejected, never dropped.
+    The transcript is untrusted data like any other upload."""
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if ext == "pdf":
         import pypdf
 
         reader = pypdf.PdfReader(io.BytesIO(data))
         text = "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+        if text:
+            return text
+        from integrations import vision
+
+        if not vision.available():
+            raise ValueError(f"This PDF has no extractable text (scanned image?) and the vision model ({vision.MODEL}) is not available in Ollama.")
+        pages = []
+        for page in reader.pages:
+            for img in page.images:
+                pages.append(vision.transcribe_image(img.data))
+        text = "\n".join(p for p in pages if p).strip()
         if not text:
-            raise ValueError("This PDF has no extractable text (scanned image?). OCR is not supported.")
+            raise ValueError("No text could be read from this scanned PDF.")
         return text
     if ext == "docx":
         with zipfile.ZipFile(io.BytesIO(data)) as z:
@@ -411,7 +423,15 @@ def extract_text(filename: str, data: bytes) -> str:
         xml = re.sub(r"<w:tab/>", "\t", xml)
         return html.unescape(re.sub(r"<[^>]+>", "", xml)).strip()
     if ext in _IMAGE_EXT:
-        raise ValueError("Images are not supported (no OCR). Upload text, PDF, DOCX, EML, HTML, CSV, JSON or Markdown.")
+        from integrations import vision
+
+        if not vision.available():
+            raise ValueError(f"Images need the local vision model ({vision.MODEL}) in Ollama (no OCR without it). "
+                             "Upload text, PDF, DOCX, EML, HTML, CSV, JSON or Markdown instead.")
+        text = vision.transcribe_image(data)
+        if not text:
+            raise ValueError("No text could be read from this image.")
+        return text
     if b"\x00" in data[:4096]:
         raise ValueError(f"'{filename}' looks like a binary file; upload a text-based format.")
     for enc in ("utf-8-sig", "utf-16", "latin-1"):
