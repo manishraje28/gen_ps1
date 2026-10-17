@@ -72,6 +72,7 @@ def test_audit_log_verifies():
 def _llm_contract(monkeypatch, data):
     import warrant.llm
     monkeypatch.setattr(config, "has_groq_key", lambda: True)
+    monkeypatch.setattr(config, "CONTRACT_USE_LLM", True)  # independent of WARRANT_CONTRACT_USE_LLM in .env (local mode sets 0)
     monkeypatch.setattr(warrant.llm, "chat_json", lambda *a, **k: data)
 
 
