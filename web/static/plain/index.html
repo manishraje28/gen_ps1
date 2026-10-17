@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WARRANT · Who authorised this action?</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/plain/styles.css?v=11">
+</head>
+<body>
+<header class="top">
+  <button class="brand" id="homeBtn" title="Back to start">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M12 2 4 5v6c0 5.2 3.4 9.9 8 11 4.6-1.1 8-5.8 8-11V5l-8-3Z" fill="url(#bg)"/><path d="m8.5 12 2.4 2.4 4.8-4.8" stroke="#070B14" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><defs><linearGradient id="bg" x1="4" y1="2" x2="20" y2="22"><stop stop-color="#4FD1FF"/><stop offset="1" stop-color="#2B7BFF"/></linearGradient></defs></svg>
+    <span>WARRANT</span>
+  </button>
+  <div class="spacer"></div>
+  <label class="techtoggle" title="Show the engineering terms (contract hash, warrant kinds, refusal codes)">
+    <input type="checkbox" id="techChk"><span class="sw"></span><span>Technical details</span>
+  </label>
+  <button class="iconbtn" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></button>
+</header>
+
+<main>
+  <!-- 1. WELCOME -->
+  <section class="screen active" id="s-welcome">
+    <div class="hero">
+      <div class="eyebrow">AI assistants that read your email can be tricked</div>
+      <h1>Who <span class="grad">authorised</span> this action?</h1>
+      <p class="lede">An email or web page can hide instructions that trick an AI assistant into sending your money or files to a stranger. WARRANT only lets the assistant use what <b>you</b> actually asked for, so hidden instructions can’t make it act.</p>
+      <div class="cta">
+        <button class="btn primary big" id="startBtn">See it stop an attack <span class="arr">→</span></button>
+        <button class="link" id="howBtn">How it works</button>
+      </div>
+    </div>
+    <div class="glow"></div>
+  </section>
+
+  <!-- 2. PICK -->
+  <section class="screen" id="s-pick">
+    <div class="wrap">
+      <h2 class="title">Pick a situation</h2>
+      <p class="sub">Each one is a normal request to an AI assistant. Most have a trap hidden in the data it reads. We’ll run an ordinary assistant and a WARRANT-protected one side by side.</p>
+      <div class="cards" id="cards"></div>
+    </div>
+  </section>
+
+  <!-- 3. RUN -->
+  <section class="screen" id="s-run">
+    <div class="wrap wide">
+      <div class="askbar">
+        <div class="avatar">You</div>
+        <div class="askq"><small>You asked the assistant</small><span id="runQuery"></span></div>
+        <div class="runstate" id="runState"></div>
+      </div>
+      <div class="lanes">
+        <div class="lane plain" id="lane-undefended">
+          <div class="lhead"><span class="lic">🤖</span><div><h3>Ordinary AI assistant</h3><small>Does whatever the text it reads tells it to</small></div></div>
+          <ol class="steps" id="steps-undefended"></ol>
+          <div class="lverdict" id="lv-undefended"></div>
+        </div>
+        <div class="lane guard" id="lane-warrant">
+          <div class="lhead"><span class="lic shield">🛡️</span><div><h3>AI assistant protected by WARRANT</h3><small>Same AI, but every action is checked against what you asked</small></div></div>
+          <ol class="steps" id="steps-warrant"></ol>
+          <div class="lverdict" id="lv-warrant"></div>
+        </div>
+      </div>
+      <div class="runfoot"><button class="btn primary" id="toResultBtn" hidden>See what happened <span class="arr">→</span></button></div>
+    </div>
+  </section>
+
+  <!-- 4. RESULT -->
+  <section class="screen" id="s-result">
+    <div class="wrap">
+      <div class="verdicts" id="verdicts"></div>
+      <div class="panel why">
+        <h3>Why? Where each value came from</h3>
+        <p class="sub small">WARRANT doesn’t try to guess whether text is “malicious”. It asks one question about every recipient, account and file: <b>who gave us this?</b></p>
+        <div id="whyList"></div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="againBtn">Try another scenario</button>
+        <button class="btn" id="replayBtn">Replay</button>
+        <button class="btn" id="stepsBtn">Back to the steps</button>
+        <button class="btn" id="verifyBtn">Verify audit log</button>
+      </div>
+      <div class="verifyout" id="verifyOut"></div>
+    </div>
+  </section>
+</main>
+
+<!-- SETTINGS -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Settings">
+  <div class="dhead"><h3>Settings</h3><button class="iconbtn" id="closeDrawer" title="Close">✕</button></div>
+  <div class="field">
+    <div class="flabel">Where the AI’s decisions come from</div>
+    <label class="radio"><input type="radio" name="mode" value="scripted" checked><span><b>Offline demo</b><small>A built-in AI stand-in that always falls for the trap. No internet or key needed.</small></span></label>
+    <label class="radio"><input type="radio" name="mode" value="replay"><span><b>Replay recorded run</b><small>Plays back the most recent saved run of this scenario.</small></span></label>
+    <label class="radio" id="liveOpt"><input type="radio" name="mode" value="groq"><span><b>Live AI (Groq)</b><small id="liveNote">Uses a real language model. Slower, and the free tier has a rate limit.</small></span></label>
+  </div>
+  <div class="field">
+    <div class="flabel">Extra layer</div>
+    <label class="check"><input type="checkbox" id="maskChk"><span><b>Also hide suspicious text from the AI</b><small>Off by default so you can watch the final check catch the attack even when the AI is fully fooled. Turn on for the normal, belt-and-braces setup.</small></span></label>
+  </div>
+  <div class="field">
+    <div class="flabel">Pace</div>
+    <label class="radio"><input type="radio" name="pace" value="calm" checked><span><b>Easy to follow</b><small>Shows each real step for a moment before the next.</small></span></label>
+    <label class="radio"><input type="radio" name="pace" value="fast"><span><b>As fast as it runs</b></span></label>
+  </div>
+  <div class="field">
+    <div class="flabel">For engineers</div>
+    <a class="link" href="/static/classic.html">Playground, benchmark and pipeline internals →</a>
+  </div>
+</aside>
+
+<!-- HOW IT WORKS -->
+<div class="modal" id="howModal" role="dialog" aria-label="How it works">
+  <div class="mbox">
+    <button class="iconbtn mclose" data-close>✕</button>
+    <h2>How WARRANT works</h2>
+    <div class="how3">
+      <div class="hstep">
+        <svg viewBox="0 0 120 80"><rect x="10" y="18" width="100" height="44" rx="10" class="s-cy"/><text x="60" y="45" text-anchor="middle" class="t-cy">“pay Bob”</text><g transform="translate(92 6)"><rect x="0" y="10" width="20" height="16" rx="3" class="f-cy"/><path d="M4 10V6a6 6 0 0 1 12 0v4" class="s-cy" fill="none"/></g></svg>
+        <b>1. Lock what you asked</b>
+        <p>Before reading anything, it writes down what you asked for, who it may contact and what it may do, and locks that list.</p>
+      </div>
+      <div class="hstep">
+        <svg viewBox="0 0 120 80"><rect x="18" y="8" width="84" height="64" rx="6" class="s-sl"/><rect x="28" y="20" width="56" height="5" rx="2" class="f-sl"/><rect x="28" y="31" width="44" height="5" rx="2" class="f-sl"/><rect x="28" y="42" width="64" height="7" rx="2" class="f-am"/><rect x="28" y="55" width="36" height="5" rx="2" class="f-sl"/></svg>
+        <b>2. Read, but don’t obey</b>
+        <p>The assistant reads emails and files freely. Instructions hidden inside them are just data. They don’t give orders.</p>
+      </div>
+      <div class="hstep">
+        <svg viewBox="0 0 120 80"><circle cx="22" cy="28" r="9" class="f-cy"/><path d="M31 28h40" class="s-cy thread"/><rect x="72" y="20" width="38" height="16" rx="4" class="s-cy"/><circle cx="22" cy="58" r="9" class="f-rd"/><path d="M31 58h22" class="s-rd" stroke-dasharray="3 3"/><path d="M60 52l10 12M70 52 60 64" class="s-rd"/></svg>
+        <b>3. Check every value’s source</b>
+        <p>Before any payment, email or share, each value must trace back to you or your own records. If it only came from hidden text, it’s blocked.</p>
+      </div>
+    </div>
+    <button class="btn primary" data-close id="howGo">Got it</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/plain/app.js?v=11"></script>
+</body>
+</html>
