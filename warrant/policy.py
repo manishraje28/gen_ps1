@@ -40,6 +40,9 @@ class ToolPolicy:
     # Output of a trusted tool comes from the user's own records (contacts,
     # account history). Free-text inside it is still audited span by span.
     trusted_source: bool = False
+    # What kind of thing a BOOK tool reserves (hotel / flight / restaurant / car). When set, the user's request
+    # must mention that kind: "book a table" does not cover a car rental an email slipped in.
+    category: str = ""
 
 
 P = ToolPolicy
@@ -78,6 +81,15 @@ POLICIES: dict[str, ToolPolicy] = {
     "remove_payee": P(E.DELETE, {"payee_id": S.RESOURCE}),
     "freeze_card": P(E.WRITE, {"card_id": S.RESOURCE}),
     "unfreeze_card": P(E.ACCOUNT, {"card_id": S.RESOURCE}),
+    # Simulated travel service (demo/travel.py). Listings and reviews are third-party data (untrusted);
+    # the user's bookings and traveller profile are their own records.
+    "list_bookings": P(E.READ, trusted_source=True),
+    "get_traveller_profile": P(E.READ, trusted_source=True),
+    "book_hotel": P(E.BOOK, {"hotel": S.TARGET}, category="hotel"),
+    "book_flight": P(E.BOOK, {"flight_id": S.TARGET}, category="flight"),
+    "book_restaurant": P(E.BOOK, {"restaurant": S.TARGET}, category="restaurant"),
+    "book_car": P(E.BOOK, {"car_id": S.TARGET}, category="car"),
+    "cancel_booking": P(E.DELETE, {"booking_id": S.RESOURCE}),
     "search_contacts": P(E.READ, trusted_source=True),
     "create_calendar_event": P(E.WRITE, {"participants": S.RECIPIENT}),
     "list_calendar_events": P(E.READ),

@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 from integrations.slack import TOOLS as SLACK_TOOLS
 
 from .bank import EXTRA_TOOLS as BANK_EXTRA_TOOLS
+from .travel import TOOLS as TRAVEL_TOOLS
+from .travel import Travel
 from .bank import Account, Bank, Card, Payee, StandingOrder, Transaction, get_balance, get_transactions, send_money  # noqa: F401
 from integrations.slack import SlackLink, connect as slack_connect
 
@@ -80,6 +82,7 @@ class AcmeEnv(TaskEnvironment):
     contacts: list[Contact]
     calendar: list[Event] = Field(default_factory=list)
     web: Web = Field(default_factory=Web)
+    travel: Travel = Field(default_factory=Travel)
     # The user's Slack workspace: the real one if SLACK_BOT_TOKEN is set, else a simulated one.
     slack: SlackLink = Field(default_factory=slack_connect)
 
@@ -217,7 +220,7 @@ TOOLS = [list_emails, search_emails, read_email, send_email, list_files, read_fi
          get_balance, get_transactions, send_money, search_contacts, create_calendar_event]
 
 
-PLAYGROUND_TOOLS = TOOLS + [list_calendar_events, get_webpage] + BANK_EXTRA_TOOLS + SLACK_TOOLS
+PLAYGROUND_TOOLS = TOOLS + [list_calendar_events, get_webpage] + BANK_EXTRA_TOOLS + TRAVEL_TOOLS + SLACK_TOOLS
 
 
 def make_runtime(tools: list | None = None) -> FunctionsRuntime:

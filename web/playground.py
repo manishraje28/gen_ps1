@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from integrations import gcal, gdrive, gmail, minimoth
 from demo.bank import upgrade as bank_upgrade
+from demo.travel import Travel
 from demo.env import TODAY, USER_EMAIL, AcmeEnv, Contact, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
 from demo.runner import INTERNAL_DOMAINS
 from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
@@ -197,6 +198,8 @@ def load_session(sid: str, user_id: str | None = None) -> "Session | None":
     s.lanes = {}
     for name, d in blob["lanes"].items():
         d["env"].bank = bank_upgrade(d["env"].bank)  # sessions saved before the multi-account bank
+        if "travel" not in d["env"].__dict__:  # sessions saved before the travel service
+            d["env"].travel = Travel()
         ln = Lane(attach_live(d["env"]) if name == "warrant" else d["env"])
         ln.messages, ln.spans, ln.seq, ln.origins = d["messages"], d["spans"], d["seq"], d["origins"]
         s.lanes[name] = ln
