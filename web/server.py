@@ -43,6 +43,18 @@ async def no_stale_ui(request, call_next):
     return response
 
 
+@app.get("/track")
+def track_page():
+    # WARRANT Track: the parcel-tracking view of a run (scripted scenarios and live turns).
+    return FileResponse(STATIC / "track" / "index.html")
+
+
+@app.get("/plain")
+def plain_page():
+    # The plain-language redesign of the classic demo (ui/plain-language-redesign).
+    return FileResponse(STATIC / "plain" / "index.html")
+
+
 @app.get("/")
 @app.get("/workspace")
 def workspace_page():

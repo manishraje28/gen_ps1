@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WARRANT Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/classic/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M12 2 4 5v6c0 5.2 3.4 9.9 8 11 4.6-1.1 8-5.8 8-11V5l-8-3Z" fill="#0F7C80"/><path d="m8.5 12 2.4 2.4 4.8-4.8" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div><h1>WARRANT</h1><small>Separating data from authority · Team Thanekars · Genesis 2.0 · PS 01</small></div>
+  </div>
+  <nav class="tabs">
+    <button class="tab active" data-page="demo">Live demo</button>
+    <button class="tab" data-page="play">Playground</button>
+    <button class="tab" data-page="bench">AgentDojo benchmark</button>
+    <button class="tab" data-page="how">How it works</button>
+    <button class="tab" id="stageBtn" type="button" title="Bigger text for presenting" onclick="toggleStage()">Stage mode</button>
+  </nav>
+  <div class="spacer"></div>
+  <span class="chip-dark" id="modelChip"><span class="dot off"></span><span>loading…</span></span>
+</header>
+
+<main>
+  <!-- ======================= LIVE DEMO ======================= -->
+  <section class="page active" id="page-demo">
+    <div class="picker" id="picker"></div>
+
+    <div class="request">
+      <div class="who">AM</div>
+      <div class="q"><small>Arjun Mehta asks the Acme assistant</small><span id="queryText">…</span>
+        <div class="attackline" id="attackLine"></div>
+      </div>
+      <button class="btn-ghost" id="peekBtn"><span data-icon="eye"></span>View poisoned source</button>
+    </div>
+
+    <div class="pipeline">
+      <div class="ptitle"><span>WARRANT pipeline (live)</span>
+        <span class="legend"><span><i style="background:#0F7C80"></i>trusted, deterministic</span><span><i style="background:#C0392B"></i>untrusted</span><span><i style="background:#d9a441"></i>probabilistic, can only narrow</span></span></div>
+      <div class="flow" id="flow"></div>
+    </div>
+
+    <div class="lanes">
+      <div class="lane" id="lane-undefended">
+        <div class="lhead"><div class="badge" data-icon="bot"></div>
+          <h2>Undefended agent<small>Plain AgentDojo tool loop · tool output goes straight to the LLM</small></h2>
+          <div class="status" id="status-undefended">idle</div></div>
+        <div id="verdict-undefended"></div>
+        <div class="timeline" id="tl-undefended"><div class="empty"><span data-icon="play"></span>Pick a scenario and press <b>Run both agents</b>.</div></div>
+      </div>
+      <div class="lane warrant" id="lane-warrant">
+        <div class="lhead"><div class="badge" data-icon="shield"></div>
+          <h2>WARRANT agent<small>Same LLM, same tools · every action needs a warrant</small></h2>
+          <div class="status" id="status-warrant">idle</div></div>
+        <div id="verdict-warrant"></div>
+        <div class="timeline" id="tl-warrant"><div class="empty"><span data-icon="shield"></span>Contract, gate decisions and provenance appear here.</div></div>
+      </div>
+    </div>
+
+    <div class="internals">
+      <div class="panel">
+        <h3><span data-icon="layers"></span>Inside WARRANT</h3>
+        <div class="subtabs">
+          <button class="subtab active" data-sub="contract">Intent Contract</button>
+          <button class="subtab" data-sub="ledger">Value Ledger</button>
+          <button class="subtab" data-sub="audit">Audit log</button>
+        </div>
+        <div id="sub-contract"><div class="empty" style="padding:24px">Compiled from the user's request only. Appears when you run.</div></div>
+        <div id="sub-ledger" hidden><div class="scroll"><table class="grid"><thead><tr><th>Span</th><th>Tool</th><th>Label</th><th>Text</th></tr></thead><tbody id="ledgerBody"></tbody></table></div></div>
+        <div id="sub-audit" hidden><div class="scroll" id="auditBody"></div><button class="btn-ghost" id="verifyBtn" style="margin-top:10px"><span data-icon="check"></span>Run deterministic post-run checker</button><div id="verifyOut" class="verify"></div></div>
+      </div>
+      <div class="panel">
+        <h3><span data-icon="globe"></span>What actually happened to the world</h3>
+        <div class="world">
+          <div class="u"><h4>Undefended</h4><div id="world-undefended"><div class="prov">No side effects yet.</div></div></div>
+          <div class="w"><h4>WARRANT</h4><div id="world-warrant"><div class="prov">No side effects yet.</div></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= PLAYGROUND ======================= -->
+  <section class="page" id="page-play">
+    <div class="play">
+      <aside class="panel ws">
+        <div class="wshead"><h3><span data-icon="db"></span>Workspace</h3><button class="btn-ghost" id="pgReset" title="Restore the original workspace and clear the chat">Reset</button></div>
+        <div class="prov">Arjun's emails, drive, web, contacts, bank and calendar. Preloaded with all four demo use cases. Click an item to read it.</div>
+        <div class="subtabs wstabs" id="wsTabs"></div>
+        <div class="wslist" id="wsList"></div>
+        <button class="run" id="pgAddBtn"><span data-icon="file"></span>Add or upload data</button>
+      </aside>
+      <div class="panel chatp">
+        <div class="chathead">
+          <h3><span data-icon="bot"></span>Chat with the Acme assistant</h3>
+          <label class="toggle" title="Run an unprotected copy of the same agent on its own copy of the world, for comparison"><input type="checkbox" id="pgCompare" checked> Also run undefended agent</label>
+          <label class="toggle" title="Untick = stress test: the planner sees raw injected text and the gate must hold alone"><input type="checkbox" id="pgMask" checked> Span Auditor masks injected text</label>
+        </div>
+        <div class="chatlog" id="chatLog"></div>
+        <div class="suggest" id="pgSuggest"></div>
+        <select id="pgHoles" class="holes" title="Plant one of the known attacks from docs/attacks/HOLES.md"></select>
+        <form class="composer" id="pgForm">
+          <textarea id="pgInput" rows="2" placeholder="Ask the assistant anything, e.g. &quot;Summarise the support page at https://acmesupplies.test/support&quot;"></textarea>
+          <button class="run" id="pgSend" type="submit"><span data-icon="arrow"></span>Send</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= BENCHMARK ======================= -->
+  <section class="page" id="page-bench">
+    <div class="hero" id="benchHero"></div>
+    <div class="charts">
+      <div class="panel"><h3><span data-icon="target"></span>Attack success rate by suite (lower is better)</h3><div class="chartlegend" id="legend1"></div><div class="bars" id="chartAsr"></div></div>
+      <div class="panel"><h3><span data-icon="trend"></span>Utility under attack by suite (higher is better)</h3><div class="chartlegend" id="legend2"></div><div class="bars" id="chartUa"></div></div>
+    </div>
+    <div class="panel" style="margin-top:14px">
+      <h3><span data-icon="table"></span>All runs</h3>
+      <div class="subtabs" id="plannerTabs"></div>
+      <div class="scroll" style="max-height:420px"><table class="grid" id="benchTable"></table></div>
+    </div>
+    <div class="note" id="benchNote"></div>
+  </section>
+
+  <!-- ======================= HOW IT WORKS ======================= -->
+  <section class="page" id="page-how">
+    <div class="how">
+      <div class="step"><div class="num">01 · TRUSTED</div><h3>Intent Contract</h3><p>Compiled from the <b>user's request only</b> (never tool data), then frozen and SHA-256 hashed. Lists allowed effects (READ / WRITE / EGRESS / PAY / DELETE / ACCOUNT), typed slots and limits.</p></div>
+      <div class="step unt"><div class="num">02 · UNTRUSTED</div><h3>Planner LLM</h3><p>Reads emails, files and web pages and proposes tool calls. We assume it <b>can be fooled</b>, so it has no authority of its own.</p></div>
+      <div class="step"><div class="num">03 · TRUSTED</div><h3>Warrant Gate</h3><p>Deterministic reference monitor. Every sink argument (recipient, IBAN, file, URL, password) needs a warrant: <b>USER_LITERAL</b>, <b>TRUSTED</b> record, <b>LOOKUP</b> evidence or bounded <b>DELEGATED</b> content.</p></div>
+      <div class="step"><div class="num">04 · TRUSTED</div><h3>Shadow execution</h3><p>Allowed calls first run on a deep copy of the environment. The state diff is checked against the effect envelope (egress/payment budgets, amount caps, deletes) before committing.</p></div>
+      <div class="step prob"><div class="num">05 · PROBABILISTIC</div><h3>Span Auditor + Ledger</h3><p>Tool output is split into spans labelled EVIDENCE or DIRECTIVE (rules + small LLM). It <b>can only narrow</b> trust: directive values can never back a warrant. Everything lands in the Value Ledger and a JSONL audit log.</p></div>
+    </div>
+    <div class="diff3">
+      <div class="panel"><h3><span data-icon="x"></span>Detectors ask "is this text malicious?"</h3><p>That is a probabilistic classifier race, and adaptive attackers win it. A missed span means a successful attack.</p></div>
+      <div class="panel"><h3><span data-icon="check"></span>WARRANT asks "who authorised this value?"</h3><p>Authority comes only from the user. Even if the planner is fully hijacked, an attacker's address, IBAN or URL has no warrant, so the action is refused with a typed reason and the agent continues the real task.</p></div>
+      <div class="panel"><h3><span data-icon="plug"></span>Drop-in for AgentDojo</h3><p>Implemented as standard AgentDojo pipeline elements: <code>ContractCompiler</code> after <code>InitQuery</code>, and <code>WarrantGate</code> in place of <code>ToolsExecutor</code>. Same LLM, same tools, same benchmark.</p></div>
+    </div>
+  </section>
+</main>
+
+<div class="modal" id="modal"><div class="box"><h3 id="modalTitle"></h3><div class="prov" id="modalSub"></div><pre id="modalBody"></pre><button class="btn-ghost" onclick="document.getElementById('modal').classList.remove('open')">Close</button></div></div>
+
+<div class="modal" id="pgModal"><div class="box">
+  <h3>Add data to the workspace</h3>
+  <div class="prov">Plant anything an attacker could control: an email, a document in the drive, or a web page. It is added to both agents' worlds.</div>
+  <div class="addform">
+    <label>Type</label>
+    <select id="addKind"><option value="email">Email (arrives in the inbox)</option><option value="file">File (in the drive)</option><option value="web">Web page</option></select>
+    <div class="f-email"><label>From</label><input id="addSender" placeholder="vendor@example.test"></div>
+    <div class="f-email"><label>Subject</label><input id="addSubject" placeholder="Updated bank details"></div>
+    <div class="f-file"><label>File name</label><input id="addName" placeholder="vendor-notice.txt"></div>
+    <div class="f-file"><label>Folder</label><input id="addFolder" value="/uploads"></div>
+    <div class="f-web"><label>URL</label><input id="addUrl" placeholder="https://vendor.test/notice"></div>
+    <label>Content</label>
+    <textarea id="addContent" rows="9" placeholder="Type or paste the content, or upload a file below."></textarea>
+    <div class="addrow">
+      <label class="btn-ghost upl"><span data-icon="file"></span><span id="addFileLbl">Upload a file (txt, pdf, docx, eml, html, csv, json, md…)</span><input type="file" id="addFile" hidden></label>
+      <select id="addTpl"><option value="">Insert an example injection…</option></select>
+    </div>
+    <div class="prov" id="addStatus"></div>
+  </div>
+  <div class="addrow"><button class="run" id="addGo">Add to workspace</button><button class="btn-ghost" id="addCancel" type="button">Cancel</button></div>
+</div></div>
+
+<script src="/static/classic/app.js"></script>
+<script src="/static/classic/playground.js"></script>
+</body>
+</html>
