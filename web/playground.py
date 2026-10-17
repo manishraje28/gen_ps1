@@ -35,6 +35,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from integrations import gcal, gdrive, gmail, minimoth, speech
+from integrations import web as realweb
 from demo.bank import upgrade as bank_upgrade
 from demo.travel import Travel
 from demo.env import TODAY, USER_EMAIL, AcmeEnv, Contact, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
@@ -106,7 +107,7 @@ def attach_live(env: AcmeEnv) -> AcmeEnv:
 
 
 def live_tools() -> list:
-    return gdrive.tools(gcal.tools(gmail.tools(PLAYGROUND_TOOLS)))
+    return realweb.tools(gdrive.tools(gcal.tools(gmail.tools(PLAYGROUND_TOOLS))))
 
 
 def connections(env: AcmeEnv) -> dict:
