@@ -146,3 +146,10 @@ def test_fallback_without_token(monkeypatch):
     with mock.patch.object(S, "_client", side_effect=AssertionError("no API in simulated mode")):
         run(env, "send_channel_message", {"channel": "general", "body": "hi"})
     assert env.slack.sim.channel_inbox["general"][-1].body == "hi"
+
+
+def test_mentions_become_names():
+    """Slack stores #general as <#C..> ids; the agent must see names it can act on."""
+    from integrations.slack import readable
+    out = readable("Post in <#C1> and copy <#C2|finance> to <#C3>, ping <@U1> <!here>", {"U1": "Manish Raje"}, {"C1": "general", "C3": "random"})
+    assert out == "Post in #general and copy #finance to #random, ping @Manish Raje @here"

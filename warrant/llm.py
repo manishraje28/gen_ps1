@@ -66,6 +66,17 @@ def content_to_text(content: Any) -> str:
 _CALL_EXTRA: dict[str, Any] = {}
 
 
+# Chat-template control tokens (<|im_start|>, <|start|>, <|channel|>, <|end|>, ...). Inside tool data they make
+# models such as gpt-oss mistake document text for message boundaries: the reply comes out unparseable and the
+# provider rejects it (output_parse_failed), so one poisoned file can stop the agent. Tool data only ever reaches
+# the model with these tokens defanged; the gate, auditor and audit log still see the original text.
+_CONTROL_TOKEN_RE = re.compile(r"<\|\s*([A-Za-z_][\w.-]{0,40})\s*\|>")
+
+
+def defang_control_tokens(text: str) -> str:
+    return _CONTROL_TOKEN_RE.sub(lambda m: f"[{m.group(1)}]", text)
+
+
 def messages_to_openai(messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for m in messages:
@@ -99,7 +110,7 @@ def messages_to_openai(messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
                 text = f"ERROR: {m['error']}" + (f"\n{text}" if text else "")
             call = m.get("tool_call")
             call_id = m.get("tool_call_id") or (call.id if call is not None else None) or "call_x"
-            out.append({"role": "tool", "tool_call_id": call_id, "content": text or "(empty result)"})
+            out.append({"role": "tool", "tool_call_id": call_id, "content": defang_control_tokens(text) or "(empty result)"})
     # Make sure every tool message id matches the preceding assistant call ids
     return out
 
