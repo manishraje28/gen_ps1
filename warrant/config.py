@@ -31,6 +31,9 @@ CONTRACT_MODEL: str = os.environ.get("WARRANT_CONTRACT_MODEL", "openai/gpt-oss-1
 # Optional LLM pass in the Span Auditor (can only narrow trust, never widen it).
 AUDITOR_MODEL: str = os.environ.get("WARRANT_AUDITOR_MODEL", "openai/gpt-oss-120b")
 AUDITOR_USE_LLM: bool = os.environ.get("WARRANT_AUDITOR_USE_LLM", "1") == "1"
+# 0 = compile the Intent Contract with the rules only (instant, deterministic; what the benchmarks measure).
+# Recommended for small local models, which tend to over-narrow slots.
+CONTRACT_USE_LLM: bool = os.environ.get("WARRANT_CONTRACT_USE_LLM", "1") == "1"
 
 TRACES_DIR = ROOT / "traces"
 RESULTS_DIR = ROOT / "results"
@@ -40,4 +43,10 @@ for _d in (TRACES_DIR, RESULTS_DIR, AUDIT_DIR):
 
 
 def has_groq_key() -> bool:
-    return bool(GROQ_API_KEY) and GROQ_API_KEY.startswith("gsk_")
+    """True if an LLM key is configured. Groq keys must look like Groq keys ("gsk_"); for any other
+    OpenAI-compatible provider set in GROQ_BASE_URL (e.g. Gemini's endpoint) any non-empty key counts."""
+    if not GROQ_API_KEY or GROQ_API_KEY.startswith(("gsk_your", "your_")):
+        return False
+    if "api.groq.com" in GROQ_BASE_URL:
+        return GROQ_API_KEY.startswith("gsk_")
+    return True

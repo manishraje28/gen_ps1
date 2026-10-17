@@ -235,6 +235,10 @@ def normalize_slot(sink: Sink, kinds: list[SlotKind]) -> list[SlotKind]:
     ks = list(kinds)
     if sink not in _NUMERIC_SINKS and SlotKind.DERIVED in ks:
         ks = [k for k in ks if k != SlotKind.DERIVED] + [SlotKind.LOOKUP]
+    # A number computed from known values is allowed => each known value read as is must be too
+    # ("DERIVED only" from a small model made the bill's own amount unpayable).
+    if sink in _NUMERIC_SINKS and SlotKind.DERIVED in ks:
+        ks += [SlotKind.LOOKUP, SlotKind.TRUSTED, SlotKind.USER_LITERAL]
     for k in list(ks):
         ks += _STRONGER.get(k, [])
     default = DEFAULT_KINDS[sink]
@@ -370,7 +374,7 @@ def compile_contract(
     delegated = is_delegation(query)
     data: dict[str, Any] = {}
     compiled_by = "rules"
-    if use_llm and config.has_groq_key():
+    if use_llm and config.CONTRACT_USE_LLM and config.has_groq_key():
         try:
             from .llm import chat_json
 
