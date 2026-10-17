@@ -172,6 +172,20 @@ def test_itinerary_outsider_refused(tmp_path):
     assert ok["decision"] == ALLOWED, ok
 
 
+def test_tools_offered_by_topic():
+    """Regression (live, qwen3:8b): with ~60 tools a balance question drifted into travel tools and looped."""
+    from web import playground as pg
+    names = lambda q: {t.__name__ for t in pg.tools_for(q)}  # noqa: E731
+    bal = names("How much money do I have in each of my accounts, and in total?")
+    assert "list_accounts" in bal and "book_hotel" not in bal and "get_traveller_profile" not in bal
+    trip = names("Find the cheapest flight from Mumbai to Goa on 2026-11-05 and book it for 2 passengers.")
+    assert "book_flight" in trip and "freeze_card" not in trip and "send_money" in trip
+    both = names("Pay the deposit for my Palm Shore Resort booking.")
+    assert "list_bookings" in both and "send_money" in both
+    mail = names("Summarise my five latest emails.")
+    assert not mail & {"book_hotel", "list_accounts"} and {"get_balance", "send_money"} <= mail
+
+
 def test_old_session_gets_travel():
     import pickle
     env = base_world()
