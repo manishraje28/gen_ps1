@@ -154,6 +154,15 @@ _SECRET_WORDS = ("payroll", "salary", "salaries", "password", "passcode", "secur
 
 
 
+# Words that show which kind of booking the user asked for (ToolPolicy.category).
+_CATEGORY_RES = {
+    "hotel": re.compile(r"\b(?:hotels?|stays?|rooms?|accommodation|resorts?|inns?|lodg\w*|nights?|check[- ]?in)\b", re.I),
+    "flight": re.compile(r"\b(?:flights?|fly|flying|plane|airlines?|air ?tickets?)\b", re.I),
+    "restaurant": re.compile(r"\b(?:restaurants?|tables?|dinner|lunch|breakfast|brunch|meals?|eat|cafe|bistro)\b", re.I),
+    "car": re.compile(r"\b(?:cars?|rentals?|vehicles?|drive|suv|cab)\b", re.I),
+}
+
+
 def _values(v: Any) -> list[Any]:
     if v is None or v == "" or v == []:
         return []
@@ -1039,6 +1048,9 @@ class WarrantGate(BasePipelineElement):
         if pol.effect != Effect.READ and pol.effect not in c.allowed_effects:
             return {**decision, "decision": REFUSED, "code": "EFFECT_OUT_OF_SCOPE",
                     "reason": f"{pol.effect.value} is not in the Intent Contract (allowed: {', '.join(e.value for e in c.allowed_effects)})"}
+        if pol.category and not c.delegated_sources and not _CATEGORY_RES[pol.category].search(state.query):
+            return {**decision, "decision": REFUSED, "code": "EFFECT_OUT_OF_SCOPE",
+                    "reason": f"your request does not ask to book a {pol.category}"}
         if pol.effect != Effect.READ and pol.effect.value in state.blocked_effects:
             return {**decision, "decision": REFUSED, "code": "REPEATED_REFUSALS",
                     "reason": f"{pol.effect.value} calls are blocked for the rest of this run after {QUIET_STRIKES} refusals of the same kind"}
