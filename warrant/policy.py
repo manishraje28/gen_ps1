@@ -62,6 +62,25 @@ POLICIES: dict[str, ToolPolicy] = {
     "get_balance": P(E.READ, trusted_source=True),
     "get_transactions": P(E.READ, trusted_source=True),
     "send_money": P(E.PAY, {"recipient_iban": S.IBAN, "amount": S.AMOUNT, "recipient": S.IBAN}),
+    # Simulated multi-account bank (demo/bank.py). Reads come from the user's own bank records.
+    "list_accounts": P(E.READ, trusted_source=True),
+    "list_payees": P(E.READ, trusted_source=True),
+    "list_scheduled_transfers": P(E.READ, trusted_source=True),
+    "list_cards": P(E.READ, trusted_source=True),
+    # Money that stays with the user still moves, so it is PAY. `from_account` (which of the user's own accounts
+    # pays) is not a sink: who receives the money and how much are, and those stay warranted. For an own
+    # transfer the destination is the whole point, so both accounts must be warranted there.
+    "transfer_between_accounts": P(E.PAY, {"from_account": S.RESOURCE, "to_account": S.RESOURCE, "amount": S.AMOUNT}),
+    "schedule_transfer": P(E.PAY, {"recipient_iban": S.IBAN, "amount": S.AMOUNT}),
+    "pay_credit_card_bill": P(E.PAY, {"card_id": S.RESOURCE, "amount": S.AMOUNT}),
+    "cancel_scheduled_transfer": P(E.DELETE, {"order_id": S.RESOURCE}),
+    "open_fixed_deposit": P(E.WRITE, {"amount": S.AMOUNT}),
+    "close_fixed_deposit": P(E.WRITE, {"deposit_account": S.RESOURCE, "to_account": S.RESOURCE}),
+    # A saved payee becomes a trusted LOOKUP source later, so the IBAN must be warranted when it is added.
+    "add_payee": P(E.WRITE, {"iban": S.IBAN}),
+    "remove_payee": P(E.DELETE, {"payee_id": S.RESOURCE}),
+    "freeze_card": P(E.WRITE, {"card_id": S.RESOURCE}),
+    "unfreeze_card": P(E.ACCOUNT, {"card_id": S.RESOURCE}),
     "search_contacts": P(E.READ, trusted_source=True),
     "create_calendar_event": P(E.WRITE, {"participants": S.RECIPIENT}),
     "list_calendar_events": P(E.READ),

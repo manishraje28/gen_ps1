@@ -40,8 +40,8 @@
     ENVELOPE_EXCEEDED: [3, "The dry run went beyond what your request allows (count or amount)."],
   };
   const KIND = { USER_LITERAL: "you typed it", TRUSTED: "your own records", LOOKUP: "data you pointed to", DELEGATED: "a task you delegated", DERIVED: "computed from known numbers", CONFIRMED: "you confirmed it" };
-  const FN_ICON = { send_email: "envelope", send_money: "coin", schedule_transaction: "coin", update_scheduled_transaction: "coin", share_file: "file", delete_file: "file", create_calendar_event: "calendar", get_webpage: "globe", post_webpage: "globe", send_direct_message: "hash", send_channel_message: "hash", read_channel_messages: "hash", get_channels: "hash", read_email: "envelope", search_emails: "envelope", list_emails: "inbox", read_file: "file", list_files: "folder", search_contacts: "user", get_balance: "wallet", get_transactions: "wallet", update_password: "key" };
-  const FN_LABEL = { send_email: "Send email", send_money: "Payment", share_file: "Share file", delete_file: "Delete file", create_calendar_event: "Calendar invite", send_direct_message: "Slack DM", send_channel_message: "Slack post", get_webpage: "Open web page", post_webpage: "Post to web page" };
+  const FN_ICON = { send_email: "envelope", send_money: "coin", schedule_transaction: "coin", update_scheduled_transaction: "coin", share_file: "file", delete_file: "file", create_calendar_event: "calendar", get_webpage: "globe", post_webpage: "globe", send_direct_message: "hash", send_channel_message: "hash", read_channel_messages: "hash", get_channels: "hash", read_email: "envelope", search_emails: "envelope", list_emails: "inbox", read_file: "file", list_files: "folder", search_contacts: "user", get_balance: "wallet", get_transactions: "wallet", list_accounts: "wallet", list_payees: "user", list_cards: "key", list_scheduled_transfers: "calendar", transfer_between_accounts: "coin", schedule_transfer: "coin", cancel_scheduled_transfer: "coin", pay_credit_card_bill: "coin", open_fixed_deposit: "wallet", close_fixed_deposit: "wallet", add_payee: "user", remove_payee: "user", freeze_card: "key", unfreeze_card: "key", update_password: "key" };
+  const FN_LABEL = { send_email: "Send email", send_money: "Payment", transfer_between_accounts: "Own transfer", schedule_transfer: "Standing order", cancel_scheduled_transfer: "Cancel standing order", pay_credit_card_bill: "Card bill", open_fixed_deposit: "Open deposit", close_fixed_deposit: "Close deposit", add_payee: "New payee", remove_payee: "Remove payee", freeze_card: "Freeze card", unfreeze_card: "Unfreeze card", share_file: "Share file", delete_file: "Delete file", create_calendar_event: "Calendar invite", send_direct_message: "Slack DM", send_channel_message: "Slack post", get_webpage: "Open web page", post_webpage: "Post to web page" };
 
   const { DAILY, ATTACKS } = window.WARRANT_FLOWS;
   DAILY.push(
@@ -309,7 +309,13 @@
   }
   const pageDrive = (P) => listPage(P, "Drive", [...(S.world?.files || []), ...(S.world?.web || []).map((w) => ({ ...w, sub: `web page · ${w.sub}`, kindWeb: 1 }))], "file", { kind: "files", add: ["file", "Add a file"] });
   const pageSlack = (P) => listPage(P, "Slack", S.world?.slack || [], "hash", { kind: "slack" });
-  const pageBank = (P) => listPage(P, "Bank", S.world?.bank || [], "coin");
+  function pageBank(P) {
+    const items = S.world?.bank || [], IC = { Accounts: "wallet", Transactions: "coin", "Standing orders": "calendar", Payees: "user", Cards: "key" };
+    const groups = [...new Set(items.map((it) => it.group || "Transactions"))];
+    P.innerHTML = `<div class="page-h"><div><h1>Bank</h1><p class="muted" style="margin:6px 0 0">Simulated bank: ${items.filter((i) => i.group === "Accounts" && i.id !== "total").length} accounts, payees, standing orders and cards. Ask the assistant to pay, transfer between accounts, schedule, freeze a card or open a deposit.</p></div></div>` +
+      groups.map((g) => `<h3 class="smallcaps" style="margin:18px 0 8px">${esc(g)}</h3><div class="card glist">${items.filter((it) => (it.group || "Transactions") === g).map((it) => `<div class="row" data-id="${esc(it.id)}"><span class="ico2">${icon(IC[g] || "coin")}</span><div><b>${esc(it.title)}</b><span class="muted">${esc(it.sub || "")}</span></div><span></span></div>`).join("")}</div>`).join("") ||
+      `<div class="card glist"><div class="empty-note">Nothing here yet.</div></div>`;
+  }
   const pageContacts = (P) => listPage(P, "Contacts", S.world?.contacts || [], "user");
   const pageCalendar = (P) => listPage(P, "Calendar", S.world?.calendar || [], "calendar");
   const pageSent = (P) => listPage(P, "Sent", S.world?.sent || [], "send", { kind: "sent" });
@@ -442,7 +448,7 @@
   }
   function renderChat() { renderRail(); }
   function renderRail() {
-    const accts = { gmail: S.conns.gmail === "live" ? "your real Gmail inbox" : (S.user?.email || "demo inbox"), slack: "warrant-demo workspace", bank: "IN07 ACME · demo bank", drive: `${(S.world?.files || []).length} files · demo` };
+    const accts = { gmail: S.conns.gmail === "live" ? "your real Gmail inbox" : (S.user?.email || "demo inbox"), slack: "warrant-demo workspace", bank: "6 accounts · simulated bank", drive: `${(S.world?.files || []).length} files · demo` };
     $("#railApps").innerHTML = SVC.map(([k, l, ic]) => `<div class="rapp"><span class="app-ico">${logo(k)}</span><div><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(accts[k])}</span></div><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : "Demo"}</span></div>`).join("");
     $("#railQuick").innerHTML = DAILY.slice(0, 5).map((f, i) => `<button type="button" data-i="${i}">${icon(f.icon)}${esc(f.title)}</button>`).join("")
       + `<button type="button" class="more" id="railMore"><span>${icon("bolt")}Try an attack</span>${icon("arrow")}</button>`;
@@ -625,7 +631,7 @@
   }
   function summarise(ev) {
     const a = ev.args || {}, label = FN_LABEL[ev.function] || ev.function.replace(/_/g, " ");
-    const to = [a.recipients, a.email, a.recipient, a.recipient_iban, a.channel, a.url].flat().filter(Boolean).join(", ");
+    const to = [a.recipients, a.email, a.recipient, a.recipient_iban, a.iban, a.to_account, a.channel, a.url].flat().filter(Boolean).join(", ");
     const amt = a.amount !== undefined ? ` INR ${Number(a.amount).toLocaleString("en-IN")}` : "";
     return `${label}${amt}${to ? ` to ${to}` : ""}`;
   }
@@ -810,8 +816,16 @@
     $("#plantForm").onsubmit = async (e) => {
       e.preventDefault();
       const k = $("#plKind").value;
+      const file = $("#plFile").files[0];
       try {
-        await api("add", { sid: S.sid, kind: k, sender: $("#plSender").value, subject: $("#plSubject").value, name: $("#plName").value, folder: $("#plFolder").value, url: $("#plUrl").value, content: $("#plContent").value, filename: "", data_b64: "" });
+        let filename = "", data_b64 = "";
+        if (file) {
+          $("#plStatus").textContent = /\.(png|jpe?g|webp|gif|bmp|tiff|pdf)$/i.test(file.name) ? "Reading the file (images use the local vision model, ~20-60 s)…" : "Uploading…";
+          filename = file.name;
+          data_b64 = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = bad; r.readAsDataURL(file); });
+        }
+        await api("add", { sid: S.sid, kind: k, sender: $("#plSender").value, subject: $("#plSubject").value, name: $("#plName").value || filename, folder: $("#plFolder").value, url: $("#plUrl").value, content: $("#plContent").value, filename, data_b64 });
+        $("#plFile").value = "";
         $("#plant").hidden = true; await refreshWorld(); toast("Added to both workspaces. Ask something that makes the assistant read it.");
       } catch (err) { $("#plStatus").textContent = err.message; }
     };

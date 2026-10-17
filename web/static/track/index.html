@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WARRANT Track</title>
+  <meta name="description" content="Track every action your AI assistant sends, like a parcel.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/track/track.css?v=2">
+</head>
+<body>
+<header class="bar">
+  <a class="mark" href="/" id="homeLink" aria-label="WARRANT Track, home">
+    <span class="mark-box" aria-hidden="true"><svg><use href="/static/track/icons/sprite.svg#parcel"/></svg></span>
+    <span class="mark-word">WARRANT <em>Track</em></span>
+  </a>
+  <nav class="bar-right">
+    <a class="quiet" href="#workspace">Your workspace</a>
+    <a class="quiet hide-sm" href="/plain">Classic view</a>
+    <div class="menu">
+      <button class="iconbtn" id="settingsBtn" aria-haspopup="true" aria-expanded="false" title="Settings">
+        <svg><use href="/static/track/icons/sprite.svg#sliders"/></svg><span class="hide-sm">Settings</span>
+      </button>
+      <div class="menu-pop" id="settingsPop" hidden>
+        <div class="smallcaps">How the assistant decides</div>
+        <label class="opt"><input type="radio" name="planner" value="scripted" checked><span><b>Offline demo</b><i>Built-in assistant, no key needed</i></span></label>
+        <label class="opt"><input type="radio" name="planner" value="replay"><span><b>Replay</b><i>Play back a saved real run</i></span></label>
+        <label class="opt" id="groqOpt"><input type="radio" name="planner" value="groq"><span><b>Live model</b><i id="groqHint">Real AI model, slower</i></span></label>
+        <hr class="perf">
+        <label class="opt chk"><input type="checkbox" id="maskChk"><span><b>Remove suspicious notes first</b><i>WARRANT also hides notes from the assistant before it reads. Off by default so you can watch customs.</i></span></label>
+      </div>
+    </div>
+  </nav>
+</header>
+
+<main id="app">
+  <!-- HOME -->
+  <section class="screen" id="s-home">
+    <div class="home-grid">
+      <div class="home-copy">
+        <p class="kicker mono">Tracking for AI assistants</p>
+        <h1>Track what your AI assistant sends.</h1>
+        <p class="lede">Every email, payment or file your assistant sends goes out like a parcel. WARRANT checks the label at customs: if <b>you</b> didn’t authorise the recipient, the parcel is held.</p>
+        <ol class="legend">
+          <li><span class="num mono">01</span>Pick a pending shipment below.</li>
+          <li><span class="num mono">02</span>Watch two assistants handle it: one ordinary, one protected.</li>
+          <li><span class="num mono">03</span>See which parcels got through, and why.</li>
+        </ol>
+      </div>
+      <aside class="home-sample" aria-hidden="true">
+        <div class="label sample">
+          <div class="label-head"><span class="mono">TRK</span><span class="mono">31B9·0881·C979</span></div>
+          <div class="field"><span class="smallcaps">From</span><span>Your AI assistant</span></div>
+          <div class="field"><span class="smallcaps">To</span><span class="mono">IN12POWR0000004471</span></div>
+          <div class="field"><span class="smallcaps">Contents</span><span>₹4,250 · electricity bill</span></div>
+          <div class="field"><span class="smallcaps">Authorised by</span><span>From the bill you pointed to</span></div>
+          <div class="barcode" data-seed="31b90881c979"></div>
+        </div>
+      </aside>
+    </div>
+
+    <a class="own" href="#workspace">
+      <span class="own-ico"><svg><use href="/static/track/icons/sprite.svg#parcel"/></svg></span>
+      <span class="own-copy"><span class="smallcaps">Use it for real</span><b>Ask your assistant anything</b><span>A live AI assistant works on a sample company workspace: emails, files, bills, contacts. Add your own data, hidden notes and all, and track every parcel it sends.</span></span>
+      <span class="go">Open workspace <svg><use href="/static/track/icons/sprite.svg#arrow"/></svg></span>
+    </a>
+
+    <div class="section-head">
+      <h2>Or watch a pending shipment</h2>
+      <span class="mono muted" id="modeTag">Offline demo</span>
+    </div>
+    <div class="shipments" id="shipments"></div>
+  </section>
+
+  <!-- RUN -->
+  <section class="screen" id="s-run" hidden>
+    <div class="run-head">
+      <button class="quiet back" id="backBtn"><svg><use href="/static/track/icons/sprite.svg#back"/></svg>All shipments</button>
+      <div class="run-title">
+        <p class="kicker mono" id="runTag"></p>
+        <h1 id="runTitle"></h1>
+        <p class="order"><span class="smallcaps">Your request</span><span id="runQuery"></span></p>
+      </div>
+    </div>
+
+    <section class="desk" id="desk" hidden>
+      <div class="desk-grid">
+        <div class="desk-main">
+          <form class="composer" id="composer" autocomplete="off">
+            <label class="smallcaps" for="msg">Ask your assistant</label>
+            <div class="composer-row">
+              <textarea id="msg" rows="2" placeholder="e.g. Pay the electricity bill in bill-oct-2026.txt"></textarea>
+              <button class="btn brand" id="sendBtn" type="submit">Send</button>
+            </div>
+            <div class="composer-opts">
+              <label class="chk"><input type="checkbox" id="compareChk" checked> Also run an ordinary assistant for comparison</label>
+              <span class="mono muted" id="deskState"></span>
+            </div>
+            <div class="chips" id="chips"></div>
+          </form>
+          <p class="desk-warn" id="deskWarn" hidden></p>
+        </div>
+        <aside class="ws" id="ws">
+          <div class="ws-head">
+            <span class="smallcaps">Your workspace</span>
+            <div class="ws-actions">
+              <button class="quiet" type="button" id="addBtn">+ Add data</button>
+              <button class="quiet" type="button" id="resetBtn">Reset</button>
+            </div>
+          </div>
+          <div class="ws-tabs" id="wsTabs" role="tablist"></div>
+          <ul class="ws-list" id="wsList"></ul>
+          <form class="add" id="addForm" hidden>
+            <div class="add-kinds">
+              <label><input type="radio" name="kind" value="email" checked> Email</label>
+              <label><input type="radio" name="kind" value="file"> File</label>
+              <label><input type="radio" name="kind" value="web"> Web page</label>
+            </div>
+            <input class="in" name="sender" placeholder="From (e.g. billing@vendor.test)" data-k="email">
+            <input class="in" name="subject" placeholder="Subject" data-k="email">
+            <input class="in" name="name" placeholder="File name (e.g. notes.txt)" data-k="file" hidden>
+            <input class="in" name="folder" placeholder="Folder (default /uploads)" data-k="file" hidden>
+            <input class="in" name="url" placeholder="URL (e.g. https://vendor.test/pay)" data-k="web" hidden>
+            <textarea class="in" name="content" rows="5" placeholder="Paste the text. Add a hidden note if you want to test an attack."></textarea>
+            <label class="upl"><input type="file" id="upFile"> <span>or upload a file (txt, pdf, docx, eml, html)</span></label>
+            <div class="add-row"><button class="btn" type="submit">Add to workspace</button><button class="quiet" type="button" id="addCancel">Cancel</button><span class="mono muted" id="addOut"></span></div>
+          </form>
+        </aside>
+      </div>
+    </section>
+
+    <div class="doc-wrap">
+      <div class="doc" id="doc">
+        <div class="doc-head"><svg><use href="/static/track/icons/sprite.svg#note"/></svg><span class="smallcaps">In the box: what the assistant opened</span></div>
+        <div class="doc-title mono" id="docTitle"></div>
+        <pre class="doc-body" id="docBody"></pre>
+      </div>
+      <aside class="doc-note" id="docNote">
+        <span class="smallcaps">How to read this</span>
+        <p id="docNoteText">The assistant opens this before it packs anything. Watch for a highlighted note.</p>
+      </aside>
+    </div>
+
+    <div class="lanes">
+      <article class="lane" id="lane-undefended" data-lane="undefended">
+        <header class="lane-head">
+          <div><span class="smallcaps">Card A</span><h3>Ordinary assistant</h3></div>
+          <span class="pill mono" data-status>Waiting</span>
+        </header>
+        <div class="parcels" data-parcels></div>
+        <div class="lane-dest" data-dest></div>
+      </article>
+      <article class="lane protected" id="lane-warrant" data-lane="warrant">
+        <header class="lane-head">
+          <div><span class="smallcaps">Card B</span><h3>Protected by WARRANT</h3></div>
+          <span class="pill mono" data-status>Waiting</span>
+        </header>
+        <div class="seal" data-seal hidden></div>
+        <div class="parcels" data-parcels></div>
+        <div class="lane-dest" data-dest></div>
+      </article>
+    </div>
+
+    <section class="summary" id="summary" hidden></section>
+
+    <section class="history">
+      <div class="section-head">
+        <h2>Tracking history</h2>
+        <div class="history-actions">
+          <span class="mono muted" id="verifyOut"></span>
+          <button class="btn ghost" id="verifyBtn" disabled><svg><use href="/static/track/icons/sprite.svg#stamp"/></svg>Verify history</button>
+        </div>
+      </div>
+      <ol class="hist" id="hist"><li class="hist-empty muted">Events appear here as the protected assistant works.</li></ol>
+      <details class="tech">
+        <summary>Technical details</summary>
+        <div id="techBody" class="mono"></div>
+      </details>
+    </section>
+  </section>
+</main>
+
+<div class="sr-only" aria-live="polite" id="live"></div>
+<script src="/static/track/track.js?v=4"></script>
+<script src="/static/track/desk.js?v=3"></script>
+</body>
+</html>

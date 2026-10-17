@@ -31,6 +31,22 @@ CONTRACT_MODEL: str = os.environ.get("WARRANT_CONTRACT_MODEL", "openai/gpt-oss-1
 # Optional LLM pass in the Span Auditor (can only narrow trust, never widen it).
 AUDITOR_MODEL: str = os.environ.get("WARRANT_AUDITOR_MODEL", "openai/gpt-oss-120b")
 AUDITOR_USE_LLM: bool = os.environ.get("WARRANT_AUDITOR_USE_LLM", "1") == "1"
+# 0 = compile the Intent Contract with the rules only (instant, deterministic; what the benchmarks measure).
+# Recommended for small local models, which tend to over-narrow slots.
+CONTRACT_USE_LLM: bool = os.environ.get("WARRANT_CONTRACT_USE_LLM", "1") == "1"
+
+# Local fallback (Ollama, OpenAI-compatible). When Groq is out of budget (daily token/request limit), would make
+# us wait longer than LLM_MAX_WAIT seconds, or is unreachable, the PLANNER switches to this local model instead of
+# stopping. The contract compiler and the auditor never use it: they fail fast and fall back to WARRANT's rules.
+LOCAL_FALLBACK: bool = os.environ.get("WARRANT_LOCAL_FALLBACK", "1") == "1"
+LOCAL_BASE_URL: str = os.environ.get("WARRANT_LOCAL_BASE_URL", "http://localhost:11434/v1")
+LOCAL_PLANNER_MODEL: str = os.environ.get("WARRANT_LOCAL_PLANNER_MODEL", "qwen2.5:7b")
+# "groq" (default: Groq first, local on failure) or "local" (planner always local, e.g. offline or out of credit).
+PLANNER_PROVIDER: str = os.environ.get("WARRANT_PLANNER_PROVIDER", "groq").strip().lower()
+LLM_MAX_WAIT: float = float(os.environ.get("WARRANT_LLM_MAX_WAIT", "8"))
+# Sent as `reasoning_effort` on every LLM call when set. "none" turns off Qwen3's hidden thinking on Ollama
+# (qwen3:8b: ~4x fewer tokens per step, same tool calls). Groq gpt-oss accepts low|medium|high. Empty = not sent.
+REASONING_EFFORT: str = os.environ.get("WARRANT_REASONING_EFFORT", "").strip().lower()
 
 TRACES_DIR = ROOT / "traces"
 RESULTS_DIR = ROOT / "results"
@@ -40,9 +56,28 @@ for _d in (TRACES_DIR, RESULTS_DIR, AUDIT_DIR):
 
 
 def has_groq_key() -> bool:
-    """A usable LLM key: a Groq key (gsk_...), or any key for another OpenAI-compatible endpoint set in
-    GROQ_BASE_URL (e.g. Gemini). The .env.example placeholder does not count."""
-    key = GROQ_API_KEY.strip()
-    if not key or "your_key" in key:
+    """True if an LLM key is configured. Groq keys must look like Groq keys ("gsk_"); for any other
+    OpenAI-compatible provider set in GROQ_BASE_URL (e.g. Gemini's endpoint) any non-empty key counts."""
+    if not GROQ_API_KEY or GROQ_API_KEY.startswith(("gsk_your", "your_")):
         return False
-    return key.startswith("gsk_") or "api.groq.com" not in GROQ_BASE_URL
+    if "api.groq.com" in GROQ_BASE_URL:
+        return GROQ_API_KEY.startswith("gsk_")
+    return True
+
+
+def local_llm_available(timeout: float = 1.5) -> bool:
+    """True if the local OpenAI-compatible server (Ollama) answers. Never raises."""
+    if not LOCAL_FALLBACK and PLANNER_PROVIDER != "local":
+        return False
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(LOCAL_BASE_URL.rstrip("/") + "/models", timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def live_llm_available() -> bool:
+    """A live planner can run: a Groq key, or the local model (so the app keeps working without credit)."""
+    return has_groq_key() or local_llm_available()

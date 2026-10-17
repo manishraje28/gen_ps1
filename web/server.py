@@ -43,6 +43,18 @@ async def no_stale_ui(request, call_next):
     return response
 
 
+@app.get("/track")
+def track_page():
+    # WARRANT Track: the parcel-tracking view of a run (scripted scenarios and live turns).
+    return FileResponse(STATIC / "track" / "index.html")
+
+
+@app.get("/plain")
+def plain_page():
+    # The plain-language redesign of the classic demo (ui/plain-language-redesign).
+    return FileResponse(STATIC / "plain" / "index.html")
+
+
 @app.get("/")
 @app.get("/workspace")
 def workspace_page():
@@ -59,7 +71,8 @@ def classic():
 @app.get("/api/config")
 def get_config():
     return {
-        "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL, "contract_model": config.CONTRACT_MODEL,
+        "has_key": config.live_llm_available(), "groq_key": config.has_groq_key(), "local_fallback": config.local_llm_available(),
+        "local_model": config.LOCAL_PLANNER_MODEL, "planner_provider": config.PLANNER_PROVIDER, "planner_model": config.PLANNER_MODEL, "contract_model": config.CONTRACT_MODEL,
         "auditor_model": config.AUDITOR_MODEL if config.AUDITOR_USE_LLM else None,
     }
 
@@ -88,7 +101,7 @@ def _sse(obj: dict) -> str:
 def run(scenario: str, planner: str = "groq", mask: int = 1, lanes: str = "undefended,warrant"):
     if scenario not in SCENARIOS:
         raise HTTPException(404, "unknown scenario")
-    if planner == "groq" and not config.has_groq_key():
+    if planner == "groq" and not config.live_llm_available():
         planner = "scripted"
     q: queue.Queue = queue.Queue()
     lane_list = [x for x in lanes.split(",") if x in ("undefended", "warrant")]
@@ -213,7 +226,7 @@ def main() -> None:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     a = ap.parse_args()
-    print(f"\n  WARRANT demo  ->  http://{a.host}:{a.port}\n  Groq key loaded: {config.has_groq_key()}  | planner: {config.PLANNER_MODEL}\n")
+    print(f"\n  WARRANT demo  ->  http://{a.host}:{a.port}\n  Groq key loaded: {config.has_groq_key()}  | planner: {config.PLANNER_MODEL}  | local fallback: {config.LOCAL_PLANNER_MODEL if config.local_llm_available() else 'not running'}\n")
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
 
