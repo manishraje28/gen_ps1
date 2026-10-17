@@ -31,11 +31,11 @@ def _sid() -> str:
     return client.post("/api/play/session").json()["sid"]
 
 
-def test_world_has_all_use_cases():
+def test_world_has_no_seeded_demo_data():
+    """Mail, calendar and drive come from the real integrations; only the simulated bank stays."""
     env = pg.full_world()
-    assert {"e3", "e4", "e5"} <= {e.id for e in env.inbox.received}
-    assert "bill-oct-2026.txt" in {f.name for f in env.drive.files}
-    assert "https://acmesupplies.test/support" in env.web.pages
+    assert not env.inbox.received and not env.drive.files and not env.calendar and not env.web.pages
+    assert env.bank.history and all(c.iban for c in env.contacts if not c.email.endswith("gmail.com"))
 
 
 def test_add_typed_email_reaches_both_worlds():
@@ -150,7 +150,7 @@ def test_carry_ledger_keeps_labels_drops_delegation():
 
 
 def test_side_effects_flag_outside_parties():
-    env = pg.full_world()
+    env = pg.base_world()
     before = pg.snapshot(env)
     from demo.env import send_email, send_money
     send_email(env.inbox, env.drive, ["priya@acme.test"], "ok", "fine")
@@ -165,3 +165,9 @@ def test_side_effects_flag_outside_parties():
 def test_webpage_url_is_a_sink():
     """URLs can smuggle data out (https://evil/?d=secret), so the gate checks them even though the tool only reads."""
     assert get_policy("get_webpage").sinks == {"url": Sink.URL}
+
+
+def test_transcribe_without_speech_model_is_a_clear_503(monkeypatch):
+    monkeypatch.setattr(pg.speech, "available", lambda: False)
+    r = client.post("/api/play/transcribe", json={"sid": _sid(), "audio_b64": "", "lang": "mr"})
+    assert r.status_code == 503 and "faster-whisper" in r.text

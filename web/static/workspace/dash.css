@@ -67,6 +67,9 @@ body.dash { --rail: 340px; --top: 68px; }
 .tool-ic { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--card-line); background: var(--card); display: grid; place-items: center; }
 .tool-ic svg { width: 17px; height: 17px; }
 .tool-ic.add { background: var(--soft); }
+.tool-ic.rec { background: #e5484d; color: #fff; border-color: #e5484d; animation: recpulse 1.2s infinite; }
+@keyframes recpulse { 50% { opacity: .6; } }
+.tool-lang { height: 34px; border-radius: 9px; border: 1px solid var(--card-line); background: var(--card); color: inherit; font-size: 12px; padding: 0 6px; }
 .mode { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--card-line); border-radius: 10px; background: var(--card); font-size: 14px; }
 .mode svg { width: 15px; height: 15px; color: var(--brand); }
 .mode select { border: 0; outline: 0; background: none; font: inherit; color: var(--ink); cursor: pointer; }

@@ -43,10 +43,15 @@
   const FN_ICON = { send_email: "envelope", send_money: "coin", schedule_transaction: "coin", update_scheduled_transaction: "coin", share_file: "file", delete_file: "file", create_calendar_event: "calendar", get_webpage: "globe", post_webpage: "globe", send_direct_message: "hash", send_channel_message: "hash", read_channel_messages: "hash", get_channels: "hash", read_email: "envelope", search_emails: "envelope", list_emails: "inbox", read_file: "file", list_files: "folder", search_contacts: "user", get_balance: "wallet", get_transactions: "wallet", list_accounts: "wallet", list_payees: "user", list_cards: "key", list_scheduled_transfers: "calendar", transfer_between_accounts: "coin", schedule_transfer: "coin", cancel_scheduled_transfer: "coin", pay_credit_card_bill: "coin", open_fixed_deposit: "wallet", close_fixed_deposit: "wallet", add_payee: "user", remove_payee: "user", freeze_card: "key", unfreeze_card: "key", search_hotels: "globe", get_hotel_reviews: "globe", search_flights: "globe", search_restaurants: "globe", search_car_rentals: "globe", list_bookings: "calendar", get_traveller_profile: "user", book_hotel: "calendar", book_flight: "calendar", book_restaurant: "calendar", book_car: "calendar", cancel_booking: "calendar", update_password: "key" };
   const FN_LABEL = { send_email: "Send email", send_money: "Payment", transfer_between_accounts: "Own transfer", schedule_transfer: "Standing order", cancel_scheduled_transfer: "Cancel standing order", pay_credit_card_bill: "Card bill", open_fixed_deposit: "Open deposit", close_fixed_deposit: "Close deposit", add_payee: "New payee", remove_payee: "Remove payee", freeze_card: "Freeze card", unfreeze_card: "Unfreeze card", book_hotel: "Hotel booking", book_flight: "Flight booking", book_restaurant: "Table booking", book_car: "Car rental", cancel_booking: "Cancel booking", share_file: "Share file", delete_file: "Delete file", create_calendar_event: "Calendar invite", send_direct_message: "Slack DM", send_channel_message: "Slack post", get_webpage: "Open web page", post_webpage: "Post to web page" };
 
-  const { DAILY, ATTACKS } = window.WARRANT_FLOWS;
-  DAILY.push(
+  const { ATTACKS } = window.WARRANT_FLOWS;
+  // Everyday tasks run against the real connected accounts (Gmail, Calendar, Drive, Slack).
+  const DAILY = [
     { icon: "inbox", tag: "safe", title: "Summarise my inbox", text: "What needs my attention today.", q: "Summarise my five latest emails and tell me what needs my attention." },
-    { icon: "calendar", tag: "safe", title: "Book a meeting", text: "A 30-minute sync with Priya.", q: "Set up a 30-minute sync with priya@acme.test on Friday at 3pm." });
+    { icon: "envelope", tag: "safe", title: "Reply to the latest email", text: "A short, polite reply.", q: "Reply to my most recent email and say thanks, I will get back to you tomorrow." },
+    { icon: "calendar", tag: "safe", title: "My week", text: "What is on my calendar.", q: "What is on my calendar this week?" },
+    { icon: "hash", tag: "safe", title: "Catch up on Slack", text: "Key updates in #general.", q: "Summarise what is new in the #general Slack channel." },
+    { icon: "folder", tag: "safe", title: "Summarise my uploads", text: "Files you added with +.", q: "Summarise the files in my /uploads folder." },
+  ];
   const NAV = [
     ["home", "Home", "home"], ["inbox", "Inbox", "inbox", () => (S.world?.emails || []).length], ["tasks", "Tasks", "tasks", () => S.tasks.length],
     ["apps", "Apps", "grid"], ["drive", "Drive", "folder"], ["slack", "Slack", "hash"], ["bank", "Bank", "wallet"], ["travel", "Travel", "globe"],
@@ -62,16 +67,7 @@
   }
   function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 3200); }
   async function refreshWorld() { S.world = (await api(`world?sid=${S.sid}`)).workspace; renderNav(); renderRail(); if (route().page !== "task") render(); }
-  // With live Gmail the inbox is real, so the everyday tasks point at real mail and a real contact.
-  const LIVE_DAILY = [
-    { icon: "inbox", tag: "safe", title: "Summarise my inbox", text: "What needs my attention today.", q: "Summarise my five latest emails and tell me what needs my attention." },
-    { icon: "envelope", tag: "safe", title: "Reply to the latest email", text: "A short, polite reply.", q: "Reply to my most recent email and say thanks, I will get back to you tomorrow." },
-    { icon: "send", tag: "safe", title: "Email a teammate", text: "Send Shubhan a quick update.", q: "Email sawantshubhan912@gmail.com a short update: the WARRANT demo is ready for review." },
-    { icon: "hash", tag: "safe", title: "Catch up on Slack", text: "Key updates in #general.", q: "Summarise what is new in the #general Slack channel." },
-    { icon: "wallet", tag: "safe", title: "Review my finances", text: "Balance and recent payments.", q: "What is my balance, and who did I pay recently?" },
-  ];
   function setMeta(d) {
-    if (d.gmail_live && !S.liveSwapped) { DAILY.splice(0, DAILY.length, ...LIVE_DAILY); S.liveSwapped = true; }
     S.hasKey = d.has_key; S.conns = d.connections || {}; S.model = d.planner_model || "";
     $("#modelLine").textContent = `Model: ${S.model}${S.hasKey ? "" : " · no API key"}`;
     renderChips();
@@ -139,7 +135,7 @@
     const h = new Date().getHours(), part = h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";
     const recent = S.tasks.slice().reverse().slice(0, 6);
     const flagged = (w.emails || []).filter((e) => e.suspicious);
-    const quick = [DAILY.find((d) => d.icon === "inbox"), DAILY[0], DAILY.find((d) => d.icon === "hash"), DAILY.find((d) => d.icon === "calendar")].filter(Boolean);
+    const quick = DAILY.slice(0, 4);
     P.innerHTML = `
       <div class="dhead"><p class="greet">Good ${part}${S.user ? `, ${esc(S.user.name.split(" ")[0])}` : ""}</p><time>${new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "short", year: "numeric" })}</time></div>
       <div class="stats">
@@ -154,20 +150,21 @@
         <form class="compose" id="ntForm" autocomplete="off">
           <textarea id="ntText" rows="3" placeholder="Ask WARRANT to do something… e.g. “Summarise my latest emails and tell me what needs my attention.”"></textarea>
           <div class="compose-bar">
-            <button class="tool-ic" type="button" id="ntAdd" title="Add data (email, file or web page)">${icon("clip")}</button>
+            <button class="tool-ic add" type="button" id="ntUp" title="Upload files (pdf, docx, txt, images…)">${icon("plus")}</button>
+            <input type="file" id="ntFile" multiple hidden accept="${UPLOAD_ACCEPT}">
+            <button class="tool-ic" type="button" id="ntMic" title="Voice input (Hindi, Marathi, English)">${icon("mic")}</button>
+            <select id="ntLang" class="tool-lang" aria-label="Voice language" title="Voice language"><option value="">Auto</option><option value="hi">हिंदी</option><option value="mr">मराठी</option><option value="en">English</option></select>
             <a class="tool-ic" href="#/inbox" title="Gmail">${logo("gmail")}</a>
             <a class="tool-ic" href="#/slack" title="Slack">${logo("slack")}</a>
             <a class="tool-ic" href="#/bank" title="Bank">${logo("bank")}</a>
             <a class="tool-ic" href="#/drive" title="Drive">${logo("drive")}</a>
-            <button class="tool-ic add" type="button" id="ntAttackBtn" title="Try an attack">${icon("plus")}</button>
             <span class="muted small" id="ntNote"></span>
             <span class="grow"></span>
             <label class="mode">${icon("spark")}<select id="ntMode" aria-label="Mode"><option value="compare">Compare</option><option value="solo">WARRANT only</option></select></label>
             <button class="send-wide" id="ntSend" type="submit">${icon("send")}Send</button>
           </div>
         </form>
-        <div class="qcards">${quick.map((f) => `<button class="qcard" type="button" data-q="${esc(f.title)}">${icon(f.icon)}<b>${esc(f.title)}</b><span>${esc(f.text)}</span></button>`).join("")}
-          <button class="qcard more" type="button" id="qMore">${icon("dots")}<span>More</span></button></div>
+        <div class="qcards">${quick.map((f) => `<button class="qcard" type="button" data-q="${esc(f.title)}">${icon(f.icon)}<b>${esc(f.title)}</b><span>${esc(f.text)}</span></button>`).join("")}</div>
       </section>
       <div class="card"><div class="card-h"><h2>Recent activity</h2><a class="link" href="#/tasks">View all ${icon("arrow")}</a></div>
         <ul class="acts">${recent.length ? recent.map(actRow).join("") : flagged.map((e) => `<li class="act" data-mail="${esc(e.id)}"><span class="ico2 ask">${icon("note")}</span><div class="t"><b>${esc(e.title)}</b><span>${esc(e.sender)} · contains instructions aimed at an AI</span></div><time>${esc(e.date)}</time><span class="pill2 ask">Hidden instructions</span><span></span></li>`).join("") || `<li class="empty-note">No tasks yet. Ask WARRANT above.</li>`}</ul></div>`;
@@ -175,8 +172,9 @@
     $$(".act[data-task]", P).forEach((r) => r.onclick = () => location.hash = `#/task/${r.dataset.task}`);
     $$(".act[data-mail]", P).forEach((r) => r.onclick = () => openItem("emails", r.dataset.mail));
     $$(".qcard[data-q]", P).forEach((b) => b.onclick = () => pickFlow(DAILY.find((d) => d.title === b.dataset.q)));
-    $("#qMore").onclick = () => { $("#attackPick").hidden = false; };
-    $("#ntAttackBtn").onclick = () => { $("#attackPick").hidden = false; };
+    $("#ntUp").onclick = () => $("#ntFile").click();
+    $("#ntFile").onchange = async () => { const fs = [...$("#ntFile").files]; $("#ntFile").value = ""; await uploadFiles(fs); };
+    $("#ntMic").onclick = () => toggleVoice();
     $("#ntMode").value = $("#optCompare").checked ? "compare" : "solo";
     $("#ntMode").onchange = () => { $("#optCompare").checked = $("#ntMode").value === "compare"; };
     $("#ntForm").onsubmit = (e) => { e.preventDefault(); startTask($("#ntText").value); };
@@ -219,12 +217,11 @@
     const all = S.world?.emails || [];
     const tabs = [["all", "All", all], ["attention", "Hidden instructions", all.filter((e) => e.suspicious)], ["outside", "From outside", all.filter((e) => !/@acme\.test$/i.test(e.sender))]];
     const cur = tabs.find((t) => t[0] === arg) || tabs[0];
-    P.innerHTML = `<div class="page-h"><h1>Inbox</h1><div style="display:flex;gap:8px"><button class="btn ghost sm" id="addMail" type="button">${icon("plus")}Add an email</button><button class="btn sm" id="sumMail" type="button">${icon("spark")}Summarise inbox</button></div></div>
+    P.innerHTML = `<div class="page-h"><h1>Inbox</h1><div style="display:flex;gap:8px"><button class="btn sm" id="sumMail" type="button">${icon("spark")}Summarise inbox</button></div></div>
       <div class="card"><div class="tabs">${tabs.map(([k, l, list]) => `<a class="tab2 ${cur[0] === k ? "on" : ""}" href="#/inbox/${k}">${l}<span class="c">${list.length}</span></a>`).join("")}</div>
       <ul class="rows">${cur[2].map((e) => `<li class="mrow" data-id="${esc(e.id)}"><span class="dot2" ${e.suspicious ? "" : 'style="visibility:hidden"'}></span>${avatar(e.sender)}<span class="from">${esc(e.sender)}</span>
         <div class="subj"><b>${esc(e.title)}</b><span>${esc(e.preview)}</span></div><div class="meta"><span>${esc(e.date)}</span>${e.suspicious ? `<span class="pill2 ask">Hidden instructions</span>` : ""}</div></li>`).join("") || `<li class="empty-note">Nothing here.</li>`}</ul></div>`;
     $$(".mrow", P).forEach((r) => r.onclick = () => openItem("emails", r.dataset.id));
-    $("#addMail").onclick = () => openPlant("email");
     $("#sumMail").onclick = () => startTask(DAILY.find((d) => d.icon === "inbox").q);
   }
 
@@ -299,13 +296,13 @@
 
   function pageApps(P) {
     const how = { gmail: "Add Gmail OAuth credentials (docs/integrations/GMAIL.md) to read and send from a dedicated demo account.", slack: "Set SLACK_BOT_TOKEN for a throwaway demo workspace (docs/integrations/SLACK.md).", bank: "Payments run in a simulated bank; Stripe test mode is available (docs/integrations/PAYMENTS.md).", drive: "Files live in the demo drive; uploads via Add data." };
-    P.innerHTML = `<div class="page-h"><h1>Apps</h1></div><div class="card glist">${SVC.map(([k, l, ic]) => `<div class="row"><span class="ico2">${logo(k)}</span><div><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(how[k])}</span></div><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : "Demo"}</span></div>`).join("")}</div>`;
+    P.innerHTML = `<div class="page-h"><h1>Apps</h1></div><div class="card glist">${SVC.map(([k, l, ic]) => `<div class="row"><span class="ico2">${logo(k)}</span><div><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(how[k])}</span></div><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : k === "bank" ? "Simulated" : "Not connected"}</span></div>`).join("")}</div>`;
   }
   function listPage(P, title, items, ic, opts = {}) {
     P.innerHTML = `<div class="page-h"><h1>${esc(title)}</h1>${opts.add ? `<button class="btn ghost sm" id="addIt" type="button">${icon("plus")}${esc(opts.add[1])}</button>` : ""}</div>
       <div class="card glist">${items.map((it) => `<div class="row ${opts.kind ? "click" : ""}" data-id="${esc(it.id)}"><span class="ico2 ${it.suspicious ? "ask" : ""}">${icon(it.suspicious ? "note" : ic)}</span><div><b>${esc(it.title)}</b><span class="muted">${esc(it.sub || "")}</span></div>${it.suspicious ? `<span class="pill2 ask">Hidden instructions</span>` : it.confidential ? `<span class="pill2 mute">Confidential</span>` : "<span></span>"}</div>`).join("") || `<div class="empty-note">Nothing here yet.</div>`}</div>`;
     if (opts.kind) $$(".row", P).forEach((r) => r.onclick = () => openItem(opts.kind, r.dataset.id));
-    if (opts.add) $("#addIt").onclick = () => openPlant(opts.add[0]);
+    if (opts.add) $("#addIt").onclick = () => pickFiles();
   }
   const pageDrive = (P) => listPage(P, "Drive", [...(S.world?.files || []), ...(S.world?.web || []).map((w) => ({ ...w, sub: `web page · ${w.sub}`, kindWeb: 1 }))], "file", { kind: "files", add: ["file", "Add a file"] });
   const pageSlack = (P) => listPage(P, "Slack", S.world?.slack || [], "hash", { kind: "slack" });
@@ -347,6 +344,54 @@
       $("#rdAsk").onclick = () => { $("#reader").hidden = true; openNewTask({ q: kind === "emails" ? `Summarise the email "${d.title}" for me.` : `Summarise ${d.title} for me.` }); };
       $("#reader").hidden = false;
     } catch (e) { toast(e.message); }
+  }
+  const UPLOAD_ACCEPT = ".txt,.pdf,.docx,.eml,.html,.htm,.csv,.json,.md,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff";
+  const b64 = (blob) => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = bad; r.readAsDataURL(blob); });
+  function pickFiles() {
+    const inp = Object.assign(document.createElement("input"), { type: "file", multiple: true, accept: UPLOAD_ACCEPT });
+    inp.onchange = () => uploadFiles([...inp.files]);
+    inp.click();
+  }
+  async function uploadFiles(files) {
+    if (!files.length) return;
+    const note = (t) => { const n = $("#ntNote"); if (n) n.textContent = t; else toast(t); };
+    const done = [];
+    for (const f of files) {
+      note(/\.(png|jpe?g|webp|gif|bmp|tiff|pdf)$/i.test(f.name) ? `Reading ${f.name} (images use the local vision model)…` : `Uploading ${f.name}…`);
+      try {
+        await api("add", { sid: S.sid, kind: "file", name: f.name, folder: "/uploads", filename: f.name, data_b64: await b64(f), sender: "", subject: "", url: "", content: "" });
+        done.push(f.name);
+      } catch (e) { note(`${f.name}: ${e.message}`); return; }
+    }
+    await refreshWorld();
+    note(`Uploaded ${done.join(", ")} to /uploads.`);
+    const box = promptBox();
+    if (box && !box.value.trim()) { box.value = `Summarise ${done.length > 1 ? "these files" : done[0]} from /uploads.`; box.focus(); }
+  }
+  // Voice: record in the browser, transcribe on the server with the local Whisper model (hi / mr / en).
+  const V = { rec: null, chunks: [] };
+  async function toggleVoice() {
+    const btn = $("#ntMic"), note = (t) => { const n = $("#ntNote"); if (n) n.textContent = t; };
+    if (V.rec) { V.rec.stop(); return; }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (e) { note(`Microphone blocked: ${e.message}`); return; }
+    V.chunks = []; V.rec = new MediaRecorder(stream);
+    V.rec.ondataavailable = (e) => { if (e.data.size) V.chunks.push(e.data); };
+    V.rec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(V.chunks, { type: V.rec.mimeType }); V.rec = null;
+      if (btn) btn.classList.remove("rec");
+      note("Transcribing…");
+      try {
+        const d = await api("transcribe", { sid: S.sid, audio_b64: await b64(blob), lang: $("#ntLang")?.value || "" });
+        const box = promptBox();
+        if (box) { box.value = (box.value.trim() ? box.value.trim() + " " : "") + d.text; box.focus(); }
+        note(d.text ? `Heard (${({ hi: "Hindi", mr: "Marathi", en: "English" })[d.lang] || d.lang}). Press Send.` : "Did not catch that, try again.");
+      } catch (e) { note(e.message); }
+    };
+    V.rec.start();
+    if (btn) btn.classList.add("rec");
+    note("Listening… click the mic again to stop.");
   }
   function openPlant(kind) {
     $("#plKind").value = kind || "email"; $("#plKind").onchange(); $("#plStatus").textContent = ""; $("#plant").hidden = false;
@@ -455,12 +500,10 @@
   }
   function renderChat() { renderRail(); }
   function renderRail() {
-    const accts = { gmail: S.conns.gmail === "live" ? "your real Gmail inbox" : (S.user?.email || "demo inbox"), slack: "warrant-demo workspace", bank: "6 accounts · simulated bank", drive: `${(S.world?.files || []).length} files · demo` };
-    $("#railApps").innerHTML = SVC.map(([k, l, ic]) => `<div class="rapp"><span class="app-ico">${logo(k)}</span><div><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(accts[k])}</span></div><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : "Demo"}</span></div>`).join("");
-    $("#railQuick").innerHTML = DAILY.slice(0, 5).map((f, i) => `<button type="button" data-i="${i}">${icon(f.icon)}${esc(f.title)}</button>`).join("")
-      + `<button type="button" class="more" id="railMore"><span>${icon("bolt")}Try an attack</span>${icon("arrow")}</button>`;
+    const accts = { gmail: S.conns.gmail === "live" ? "your real Gmail inbox" : (S.user?.email || "not connected"), slack: "warrant-demo workspace", bank: "6 accounts · simulated bank", drive: `${(S.world?.files || []).length} files` };
+    $("#railApps").innerHTML = SVC.map(([k, l, ic]) => `<div class="rapp"><span class="app-ico">${logo(k)}</span><div><b>${k === "drive" ? "Google Drive" : l}</b><span class="muted">${esc(accts[k])}</span></div><span class="pill2 ${S.conns[k] === "live" ? "ok" : "mute"}">${S.conns[k] === "live" ? "Connected" : k === "bank" ? "Simulated" : "Not connected"}</span></div>`).join("");
+    $("#railQuick").innerHTML = DAILY.slice(0, 5).map((f, i) => `<button type="button" data-i="${i}">${icon(f.icon)}${esc(f.title)}</button>`).join("");
     $$("#railQuick [data-i]").forEach((b) => b.onclick = () => pickFlow(DAILY[+b.dataset.i]));
-    $("#railMore").onclick = () => { $("#attackPick").hidden = false; };
     const items = [];
     for (const T of S.tasks) for (const id of T.pending) { const t = T.tickets[`warrant:${id}`]; if (t) items.push({ T, t, id }); }
     $("#apprH").textContent = `Approvals${items.length ? ` (${items.length})` : ""}`;
