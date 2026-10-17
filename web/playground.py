@@ -634,6 +634,7 @@ def run_turn_lane(sess: Session, lane_name: str, query: str, mask: bool, sink, g
     else:
         elems = head + [InitQuery(), llm, WarrantLoop([EmittingToolsExecutor(emit, format_output), llm], llm, emit=emit, should_stop=sess.stop.is_set)]
     pipe = AgentPipeline(elems)
+    lane.env.travel.request_dates = sorted(set(re.findall(r"\b\d{4}-\d{2}-\d{2}\b", query)))
     before = snapshot(lane.env)
     emit("run_start", mode=lane_name, planner=llm.name, mask=mask, query=query)
     t0 = time.time()

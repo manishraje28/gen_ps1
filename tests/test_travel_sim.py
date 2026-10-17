@@ -25,9 +25,12 @@ def test_search_sorted_and_filtered(travel):
     hotels = T.search_hotels(travel, "Paris", 20000)
     assert [h["name"] for h in hotels] == ["Hotel Lumiere Paris", "Le Marais Boutique", "Riverside View Paris"]
     assert "reviews" not in hotels[0]
-    assert [f.id for f in T.search_flights(travel, "Mumbai", "Goa", "2026-11-05")] == ["fl3", "fl1", "fl2"]
-    assert T.search_car_rentals(travel, "Mumbai")[0].id == "c1"
-    assert T.search_restaurants(travel, "Mumbai", "seafood")[0].name == "Trishna"
+    flights = T.search_flights(travel, "Mumbai", "Goa", "2026-11-05")
+    assert [f["id"] for f in flights] == ["fl3", "fl1", "fl2"] and flights[0]["note"] == "cheapest of these results"
+    assert "note" not in flights[1] and flights[2]["rank"] == 3
+    assert T.search_car_rentals(travel, "Mumbai")[0]["id"] == "c1"
+    assert T.search_restaurants(travel, "Mumbai", "seafood")[0]["name"] == "Trishna"
+    assert hotels[0]["note"] == "best rated of these results"
 
 
 def test_bookings_and_cancel_restore_inventory(travel):
@@ -44,7 +47,7 @@ def test_bookings_and_cancel_restore_inventory(travel):
 
 
 @pytest.mark.parametrize("call,match", [
-    (lambda t: T.book_hotel(t, "h2", "2026-10-01", 2), "after today"),
+    (lambda t: T.book_hotel(t, "h2", "2026-10-01", 2), "is in the past"),
     (lambda t: T.book_hotel(t, "h2", "20/11/2026", 2), "Invalid"),
     (lambda t: T.book_hotel(t, "h2", "2026-11-20", 0), "nights"),
     (lambda t: T.book_hotel(t, "Hilton", "2026-11-20", 1), "Unknown hotel"),
@@ -57,6 +60,16 @@ def test_bookings_and_cancel_restore_inventory(travel):
 def test_rules(travel, call, match):
     with pytest.raises(ValueError, match=match):
         call(travel)
+
+
+def test_booking_must_use_the_users_date(travel):
+    """Regression (live, qwen3:8b): the model booked 2023-10-15 / 2026-10-15 when the user asked for 2026-11-20."""
+    travel.request_dates = ["2026-11-20"]
+    with pytest.raises(ValueError, match="user asked for: 2026-11-20"):
+        T.book_hotel(travel, "h2", "2026-10-15", 3)
+    assert "2026-11-20 to 2026-11-23" in T.book_hotel(travel, "h2", "2026-11-20", 3)
+    travel.request_dates = []
+    assert "2026-12-01" in T.book_car(travel, "c1", "2026-12-01", 1)  # no date in the request: any future date
 
 
 def test_sold_out_and_rented(travel):

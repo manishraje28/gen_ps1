@@ -161,6 +161,9 @@ class Travel(BaseModel):
     cars: list[CarRental] = Field(default_factory=_cars)
     bookings: list[Booking] = Field(default_factory=_bookings)
     traveller: Traveller = Field(default_factory=Traveller)
+    # Dates (YYYY-MM-DD) written in the user's current request, set by the app before each turn. Small models
+    # sometimes book a made-up date; a booking start date that is not one of these is refused with a hint.
+    request_dates: list[str] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ helpers
@@ -170,7 +173,15 @@ def _date(d: str, what: str = "date") -> str:
     except Exception:
         raise ValueError(f"Invalid {what} '{d}': use YYYY-MM-DD") from None
     if out <= TODAY:
-        raise ValueError(f"The {what} must be after today ({TODAY})")
+        raise ValueError(f"The {what} {out} is in the past (today is {TODAY}). Use the exact date from the user's request.")
+    return out
+
+
+def _start(t: Travel, d: str, what: str) -> str:
+    """A booking start date: valid, in the future, and (when the user wrote dates) one of the user's dates."""
+    out = _date(d, what)
+    if t.request_dates and out not in t.request_dates:
+        raise ValueError(f"The {what} {out} is not a date in the user's request. The user asked for: {', '.join(t.request_dates)}.")
     return out
 
 
@@ -190,6 +201,15 @@ def _city(items: list, city: str) -> list:
     return [it for it in items if not c or getattr(it, "city", "").lower() == c]
 
 
+def _ranked(rows: list[dict], best: str) -> list[dict]:
+    """Numbers the results in order and marks the first one (cheapest / best rated) so small models pick right."""
+    for i, r in enumerate(rows):
+        r["rank"] = i + 1
+        if i == 0:
+            r["note"] = f"{best} of these results"
+    return rows
+
+
 def _next_booking_id(t: Travel) -> str:
     return f"b{max([int(b.id[1:]) for b in t.bookings if b.id[1:].isdigit()], default=0) + 1}"
 
@@ -202,7 +222,7 @@ def search_hotels(travel: Annotated[Travel, Depends("travel")], city: str, max_p
     :param max_price_per_night: optional budget per night in INR.
     """
     out = [h for h in _city(travel.hotels, city) if max_price_per_night is None or h.price_per_night <= float(max_price_per_night)]
-    return [h.model_dump(exclude={"reviews"}) for h in sorted(out, key=lambda h: -h.rating)]
+    return _ranked([h.model_dump(exclude={"reviews"}) for h in sorted(out, key=lambda h: -h.rating)], "best rated")
 
 
 def get_hotel_reviews(travel: Annotated[Travel, Depends("travel")], hotel: str) -> str:
@@ -214,7 +234,7 @@ def get_hotel_reviews(travel: Annotated[Travel, Depends("travel")], hotel: str) 
     return f"Reviews of {h.name} (rating {h.rating}):\n" + "\n".join(f"- {r}" for r in h.reviews)
 
 
-def search_flights(travel: Annotated[Travel, Depends("travel")], origin: str, destination: str, date: str = "") -> list[Flight]:
+def search_flights(travel: Annotated[Travel, Depends("travel")], origin: str, destination: str, date: str = "") -> list[dict]:
     """Searches flights between two cities, optionally on a date (YYYY-MM-DD). Prices are INR per passenger.
 
     :param origin: departure city.
@@ -222,26 +242,27 @@ def search_flights(travel: Annotated[Travel, Depends("travel")], origin: str, de
     :param date: optional travel date.
     """
     o, d = origin.strip().lower(), destination.strip().lower()
-    return sorted([f for f in travel.flights if f.origin.lower() == o and f.destination.lower() == d and (not date or f.date == date.strip())],
-                  key=lambda f: f.price)
+    found = [f for f in travel.flights if f.origin.lower() == o and f.destination.lower() == d and (not date or f.date == date.strip())]
+    return _ranked([f.model_dump() for f in sorted(found, key=lambda f: f.price)], "cheapest")
 
 
-def search_restaurants(travel: Annotated[Travel, Depends("travel")], city: str, cuisine: str = "") -> list[Restaurant]:
+def search_restaurants(travel: Annotated[Travel, Depends("travel")], city: str, cuisine: str = "") -> list[dict]:
     """Searches restaurants in a city: id, name, cuisine, rating, price for two (INR), address.
 
     :param city: city name.
     :param cuisine: optional cuisine, e.g. "seafood".
     """
     c = cuisine.strip().lower()
-    return sorted([r for r in _city(travel.restaurants, city) if not c or c in r.cuisine.lower()], key=lambda r: -r.rating)
+    found = [r for r in _city(travel.restaurants, city) if not c or c in r.cuisine.lower()]
+    return _ranked([r.model_dump(exclude={"reviews"}) for r in sorted(found, key=lambda r: -r.rating)], "best rated")
 
 
-def search_car_rentals(travel: Annotated[Travel, Depends("travel")], city: str) -> list[CarRental]:
+def search_car_rentals(travel: Annotated[Travel, Depends("travel")], city: str) -> list[dict]:
     """Searches car rentals in a city: id, company, car, price per day (INR), rating, availability.
 
     :param city: city name.
     """
-    return sorted(_city(travel.cars, city), key=lambda c: c.price_per_day)
+    return _ranked([c.model_dump() for c in sorted(_city(travel.cars, city), key=lambda c: c.price_per_day)], "cheapest")
 
 
 def list_bookings(travel: Annotated[Travel, Depends("travel")]) -> list[Booking]:
@@ -264,7 +285,7 @@ def book_hotel(travel: Annotated[Travel, Depends("travel")], hotel: str, check_i
     :param guests: number of guests (1-4).
     """
     h = _find(travel.hotels, hotel, "hotel", lambda x: x.name)
-    start = _date(check_in, "check-in date")
+    start = _start(travel, check_in, "check-in date")
     if not 1 <= int(nights) <= 30 or not 1 <= int(guests) <= 4:
         raise ValueError("nights must be 1-30 and guests 1-4")
     if h.rooms_left < 1:
@@ -307,7 +328,7 @@ def book_restaurant(travel: Annotated[Travel, Depends("travel")], restaurant: st
     :param people: party size (1-12).
     """
     r = _find(travel.restaurants, restaurant, "restaurant", lambda x: x.name)
-    day = _date(date, "date")
+    day = _start(travel, date, "date")
     t = str(time).strip()
     if len(t) != 5 or t[2] != ":" or not ("12:00" <= t <= "23:00"):
         raise ValueError("time must be HH:MM between 12:00 and 23:00")
@@ -326,7 +347,7 @@ def book_car(travel: Annotated[Travel, Depends("travel")], car_id: str, pickup_d
     :param days: rental days (1-30).
     """
     c = _find(travel.cars, car_id, "car rental", lambda x: x.company)
-    start = _date(pickup_date, "pick-up date")
+    start = _start(travel, pickup_date, "pick-up date")
     if not 1 <= int(days) <= 30:
         raise ValueError("days must be 1-30")
     if not c.available:
