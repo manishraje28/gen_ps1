@@ -810,8 +810,16 @@
     $("#plantForm").onsubmit = async (e) => {
       e.preventDefault();
       const k = $("#plKind").value;
+      const file = $("#plFile").files[0];
       try {
-        await api("add", { sid: S.sid, kind: k, sender: $("#plSender").value, subject: $("#plSubject").value, name: $("#plName").value, folder: $("#plFolder").value, url: $("#plUrl").value, content: $("#plContent").value, filename: "", data_b64: "" });
+        let filename = "", data_b64 = "";
+        if (file) {
+          $("#plStatus").textContent = /\.(png|jpe?g|webp|gif|bmp|tiff|pdf)$/i.test(file.name) ? "Reading the file (images use the local vision model, ~20-60 s)…" : "Uploading…";
+          filename = file.name;
+          data_b64 = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = bad; r.readAsDataURL(file); });
+        }
+        await api("add", { sid: S.sid, kind: k, sender: $("#plSender").value, subject: $("#plSubject").value, name: $("#plName").value || filename, folder: $("#plFolder").value, url: $("#plUrl").value, content: $("#plContent").value, filename, data_b64 });
+        $("#plFile").value = "";
         $("#plant").hidden = true; await refreshWorld(); toast("Added to both workspaces. Ask something that makes the assistant read it.");
       } catch (err) { $("#plStatus").textContent = err.message; }
     };

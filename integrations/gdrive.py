@@ -108,7 +108,12 @@ def list_files(drive: Annotated[Drive, Depends("drive")], folder: str | None = N
 
     :param folder: optional folder path to filter by.
     """
-    return [f"{f['id']} | {FOLDER}/{f['name']}" for f in _list()]
+    live = _list()
+    ids = {m["id"] for m in live}
+    out = [f"{f['id']} | {FOLDER}/{f['name']}" for f in live]
+    # Files added in the app (uploads, planted data) live only in the session's drive: list them too.
+    out += [f"{f.id} | {f.folder}/{f.name}" for f in drive.files if f.id not in ids and (not folder or f.folder == folder)]
+    return out
 
 
 def read_file(drive: Annotated[Drive, Depends("drive")], name_or_id: str) -> str:
@@ -123,6 +128,9 @@ def read_file(drive: Annotated[Drive, Depends("drive")], name_or_id: str) -> str
             if not any(f.id == meta["id"] for f in drive.files):
                 drive.files.append(File(id=meta["id"], name=meta["name"], folder=FOLDER, content=text))
             return f"{FOLDER}/{meta['name']} (id {meta['id']})\n\n{text}"
+    for f in drive.files:  # uploaded in the app, not in Google Drive
+        if name_or_id in (f.id, f.name) or name == f.name:
+            return f"{f.folder}/{f.name} (id {f.id})\n\n{f.content}"
     raise ValueError(f"File {name_or_id} not found")
 
 

@@ -73,6 +73,16 @@ def test_calendar_list_surfaces_description(apis):
     assert get_policy("list_calendar_events").effect.value == "READ"
 
 
+def test_live_drive_still_sees_uploaded_files(apis):
+    """Regression (live): with Google Drive connected the agent could not find an uploaded bill image."""
+    from demo.env import File
+    env = gdrive.attach(base_world())
+    env.drive.files.append(File(id="f8", name="power_bill.png", folder="/uploads", content="Pay to IBAN: IN12POWR0000004471"))
+    assert any(line.startswith("f8 | /uploads/power_bill.png") for line in gdrive.list_files(env.drive))
+    assert "IN12POWR0000004471" in gdrive.read_file(env.drive, "power_bill.png")
+    assert "IN12POWR0000004471" in gdrive.read_file(env.drive, "f8")
+
+
 def test_drive_read_and_shadow_share(apis):
     _, drv = apis
     env = gdrive.attach(base_world())
