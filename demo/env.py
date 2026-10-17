@@ -78,6 +78,7 @@ class Event(BaseModel):
     title: str
     date: str
     participants: list[str]
+    description: str = ""
 
 
 class Web(BaseModel):
@@ -235,6 +236,11 @@ def create_calendar_event(calendar: Annotated[list[Event], Depends("calendar")],
     return f"Created '{title}' on {date} with {', '.join(participants)}"
 
 
+def list_calendar_events(calendar: Annotated[list[Event], Depends("calendar")]) -> list[Event]:
+    """Lists upcoming calendar events (id, title, date, participants, description)."""
+    return list(calendar)
+
+
 def get_webpage(web: Annotated[Web, Depends("web")], url: str) -> str:
     """Fetches a web page and returns its content.
 
@@ -251,7 +257,7 @@ TOOLS = [list_emails, search_emails, read_email, send_email, list_files, read_fi
          get_balance, get_transactions, send_money, search_contacts, create_calendar_event]
 
 
-PLAYGROUND_TOOLS = TOOLS + [get_webpage] + SLACK_TOOLS
+PLAYGROUND_TOOLS = TOOLS + [list_calendar_events, get_webpage] + SLACK_TOOLS
 
 
 def make_runtime(tools: list | None = None) -> FunctionsRuntime:

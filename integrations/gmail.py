@@ -38,6 +38,10 @@ from demo.env import Email, Inbox
 from warrant.policy import POLICIES, Effect, Sink, ToolPolicy
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"]
+# One consent covers Gmail, Calendar and Drive (integrations/gcal.py, integrations/gdrive.py share this token).
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+ALL_SCOPES = SCOPES + [CALENDAR_SCOPE, DRIVE_SCOPE]
 ROOT = Path(__file__).resolve().parent.parent
 
 POLICIES.update({
@@ -83,6 +87,29 @@ def available() -> bool:
     return _service is not None or (credentials_file().exists() and token_file().exists())
 
 
+def granted_scopes() -> set[str]:
+    """Scopes the saved token actually holds (empty without a token)."""
+    import json
+    try:
+        return set(json.loads(token_file().read_text(encoding="utf-8")).get("scopes") or [])
+    except Exception:
+        return set()
+
+
+def credentials() -> Any:
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    creds = Credentials.from_authorized_user_file(str(token_file()), sorted(granted_scopes()) or SCOPES)
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            token_file().write_text(creds.to_json(), encoding="utf-8")
+        else:
+            raise RuntimeError("Google token invalid; run: python -m integrations.gmail --consent")
+    return creds
+
+
 def service() -> Any:
     """One client per thread: googleapiclient's httplib2 transport is not thread-safe, and the two lanes
     run in parallel (a shared client garbles TLS: SSLError WRONG_VERSION_NUMBER)."""
@@ -90,18 +117,9 @@ def service() -> Any:
         return _service
     svc = getattr(_local, "service", None)
     if svc is None:
-        from google.auth.transport.requests import Request
-        from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
 
-        creds = Credentials.from_authorized_user_file(str(token_file()), SCOPES)
-        if not creds.valid:
-            if creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-                token_file().write_text(creds.to_json(), encoding="utf-8")
-            else:
-                raise RuntimeError("Gmail token invalid; run: python -m integrations.gmail --consent")
-        svc = _local.service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        svc = _local.service = build("gmail", "v1", credentials=credentials(), cache_discovery=False)
     return svc
 
 
@@ -293,7 +311,7 @@ def consent() -> None:
     cf = credentials_file()
     if not cf.exists():
         sys.exit(f"Missing {cf}. Save the OAuth desktop client JSON there (see docs/integrations/GMAIL.md).")
-    creds = InstalledAppFlow.from_client_secrets_file(str(cf), SCOPES).run_local_server(port=0)
+    creds = InstalledAppFlow.from_client_secrets_file(str(cf), ALL_SCOPES).run_local_server(port=0)
     token_file().parent.mkdir(parents=True, exist_ok=True)
     token_file().write_text(creds.to_json(), encoding="utf-8")
     print(f"Saved token to {token_file()}")

@@ -60,6 +60,17 @@ A browser tab opens. Sign in as the **demo** account, click past "Google hasn't 
 `python -m integrations.gmail`, which prints `available: True`.
 To revoke access, go to https://myaccount.google.com/permissions and delete the token file.
 
+## 7b. Google Calendar and Drive (optional, same token)
+`integrations/gcal.py` and `integrations/gdrive.py` reuse this sign-in. To turn them on:
+1. In the same Cloud project, enable the **Google Calendar API** and the **Google Drive API** (APIs & Services > Library).
+2. Delete `secrets/gmail_token.json` and run the consent again. It now also asks for
+   `calendar.events` and `drive`; allow both.
+3. Restart the server. `/workspace` shows Gmail, Calendar and Drive as **Connected**, and their panels list the real data.
+
+Only the protected lane writes for real. Invites (`create_calendar_event`) and shares (`share_file`) obey
+`GMAIL_ALLOWED_DOMAINS`, and `delete_file` moves files to Drive's trash, never deletes them permanently.
+A token without these scopes keeps Calendar and Drive simulated.
+
 ## 8. Plant an injected email for the demo
 From any other mailbox (a second account you own), send the demo account something like:
 

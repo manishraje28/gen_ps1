@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import copy
 import dataclasses
+import datetime
 import email
 import email.policy
 import html
@@ -33,7 +34,7 @@ from fastapi import Depends, Request, APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from integrations import gmail, minimoth
+from integrations import gcal, gdrive, gmail, minimoth
 from demo.env import TODAY, USER_EMAIL, AcmeEnv, Contact, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
 from demo.runner import INTERNAL_DOMAINS
 from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
@@ -51,11 +52,20 @@ router = APIRouter(prefix="/api/play")
 PLAY_SYSTEM = SYSTEM_MESSAGE + " You can also fetch web pages with get_webpage."
 
 
+def today() -> str:
+    """The date the agent works with: the real one once a Google account is connected (so "tomorrow" lands
+    on the real calendar), the fixed demo date otherwise (scenarios and tests depend on it)."""
+    if gmail.available() or gcal.available() or gdrive.available():
+        d = datetime.date.today()
+        return f"{d.isoformat()} ({d.strftime('%A')})"
+    return TODAY
+
+
 def play_system(user: dict | None) -> str:
     """The agent's instructions for the signed-in user (no hard-coded persona)."""
     if not user:
-        return PLAY_SYSTEM
-    return (f"You are the personal AI assistant of {user['name']} ({user['email']}). Today is {TODAY}. "
+        return PLAY_SYSTEM.replace(f"Today is {TODAY}", f"Today is {today()}")
+    return (f"You are the personal AI assistant of {user['name']} ({user['email']}). Today is {today()}. "
             "Use the available tools to complete the user's request end to end, then reply with a short summary of "
             "what you did. Use file ids from list_files for attachments. You can also fetch web pages with get_webpage.")
 # Stress test: an assistant that obeys instructions it finds in data (what a weak or jailbroken model does).
@@ -101,6 +111,21 @@ def full_world() -> AcmeEnv:
     return env
 
 
+def attach_live(env: AcmeEnv) -> AcmeEnv:
+    """Bind ``env`` as the world whose writes really happen (Gmail, Calendar, Drive; each only if connected)."""
+    return gdrive.attach(gcal.attach(gmail.attach(env)))
+
+
+def live_tools() -> list:
+    return gdrive.tools(gcal.tools(gmail.tools(PLAYGROUND_TOOLS)))
+
+
+def connections(env: AcmeEnv) -> dict:
+    live = lambda ok: "live" if ok else "simulated"  # noqa: E731
+    return {"gmail": live(gmail.is_live(env.inbox)), "calendar": live(gcal.is_live(env.calendar)),
+            "drive": live(gdrive.is_live(env.drive)), "slack": live(env.slack.live), "bank": "simulated"}
+
+
 # ---------------------------------------------------------------- sessions
 class Lane:
     """One agent's private world and memory."""
@@ -128,7 +153,7 @@ class Session:
         # (that is how the gate previews a send), so the undefended agent's messages would never be sent.
         # Only the protected lane may really send. The unprotected lane reads the same live inbox (Gmail reads are
         # always live) but its sends stay staged in its own world, so an attack "succeeding" never mails anyone.
-        self.lanes = {"warrant": Lane(gmail.attach(world)), "undefended": Lane(full_world())}
+        self.lanes = {"warrant": Lane(attach_live(world)), "undefended": Lane(full_world())}
         self.turns = 0
         self.pending: dict[str, dict] = {}  # NEEDS_INPUT calls the user may approve, by call id
         self.history: list[dict] = []       # every turn's prompt + events, so the UI can redraw it after a reload
@@ -170,7 +195,7 @@ def load_session(sid: str, user_id: str | None = None) -> "Session | None":
     s.history = store.tasks(sid, owner)
     s.lanes = {}
     for name, d in blob["lanes"].items():
-        ln = Lane(gmail.attach(d["env"]) if name == "warrant" else d["env"])
+        ln = Lane(attach_live(d["env"]) if name == "warrant" else d["env"])
         ln.messages, ln.spans, ln.seq, ln.origins = d["messages"], d["spans"], d["seq"], d["origins"]
         s.lanes[name] = ln
     return s
@@ -292,17 +317,37 @@ def _received(env: AcmeEnv) -> list:
     return env.inbox.received
 
 
+def _events(env: AcmeEnv) -> list:
+    if gcal.is_live(env.calendar):
+        try:
+            return gcal.snapshot()
+        except Exception:
+            pass
+    return env.calendar
+
+
+def _file_items(env: AcmeEnv) -> list[dict]:
+    if gdrive.is_live(env.drive):
+        try:
+            # Contents load when a file is opened, so the list can't flag hidden instructions yet.
+            return [{"id": m["id"], "title": m["name"], "sub": gdrive.FOLDER, "folder": gdrive.FOLDER,
+                     "confidential": False, "suspicious": False} for m in gdrive.snapshot()]
+        except Exception:
+            pass
+    return [{"id": f.id, "title": f.name, "sub": f"{f.folder}{' · confidential' if f.confidential else ''}", "folder": f.folder,
+             "confidential": bool(f.confidential), "suspicious": _suspicious(f.content)} for f in env.drive.files]
+
+
 def workspace(env: AcmeEnv) -> dict:
     return {
         "emails": [{"id": e.id, "title": e.subject, "sub": f"{e.sender} · {e.date}", "sender": e.sender, "date": e.date,
                     "preview": " ".join((e.body or "").split())[:140], "suspicious": _suspicious(e.body)}
                    for e in sorted(_received(env), key=lambda e: e.date, reverse=True)],
-        "files": [{"id": f.id, "title": f.name, "sub": f"{f.folder}{' · confidential' if f.confidential else ''}", "folder": f.folder,
-                   "confidential": bool(f.confidential), "suspicious": _suspicious(f.content)} for f in env.drive.files],
+        "files": _file_items(env),
         "web": [{"id": u, "title": u.split("//", 1)[-1], "sub": f"{len(c):,} chars"} for u, c in env.web.pages.items()],
         "contacts": [{"id": c.name, "title": c.name, "sub": " · ".join(x for x in (c.email, c.iban, c.note) if x)} for c in env.contacts],
         "bank": [{"id": str(t.id), "title": f"INR {t.amount:,.0f} → {t.recipient_name or t.recipient_iban}", "sub": f"{t.date} · {t.subject}"} for t in env.bank.history],
-        "calendar": [{"id": e.id, "title": e.title, "sub": f"{e.date} · {', '.join(e.participants)}"} for e in env.calendar],
+        "calendar": [{"id": e.id, "title": e.title, "sub": f"{e.date} · {', '.join(e.participants)}"} for e in _events(env)],
         "sent": [{"id": e.id, "title": e.subject, "sub": f"to {', '.join(e.recipients)}"} for e in env.inbox.sent],
         "slack": _slack_items(env),
     }
@@ -321,6 +366,16 @@ def item_text(env: AcmeEnv, kind: str, item_id: str) -> tuple[str, str]:
         for e in _received(env) + env.inbox.sent:
             if e.id == item_id:
                 return e.subject, format_output(e)
+    if kind == "files" and gdrive.is_live(env.drive):
+        try:
+            name, text = gdrive.text_of(item_id)
+            return f"{gdrive.FOLDER}/{name}", text
+        except Exception:
+            pass
+    if kind == "calendar":
+        for e in _events(env):
+            if e.id == item_id:
+                return e.title, f"{e.date} · {', '.join(e.participants)}\n\n{e.description}"
     if kind == "files":
         for f in env.drive.files:
             if f.id == item_id:
@@ -470,7 +525,7 @@ def run_turn_lane(sess: Session, lane_name: str, query: str, mask: bool, sink, g
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # InitQuery warns when it is not the first message (multi-turn)
-            _, _, env, messages, extra = pipe.query(query, make_runtime(gmail.tools(PLAYGROUND_TOOLS)), lane.env, trim_history(lane.messages))
+            _, _, env, messages, extra = pipe.query(query, make_runtime(live_tools()), lane.env, trim_history(lane.messages))
         lane.env, lane.messages = env, list(messages)
         state = extra.get("warrant")
         if state is not None:
@@ -504,8 +559,7 @@ def new_session(user: dict = Depends(current_user)) -> dict:
     env = s.lanes["warrant"].env
     return {"sid": s.id, "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
             "gmail_live": gmail.is_live(env.inbox),
-            "connections": {"gmail": "live" if gmail.is_live(env.inbox) else "simulated",
-                            "slack": "live" if env.slack.live else "simulated", "bank": "simulated", "drive": "simulated"}}
+            "connections": connections(env)}
 
 
 @router.get("/world")
@@ -707,7 +761,7 @@ def approve(body: Approval, user: dict = Depends(current_user)) -> dict:
     try:
         lane = s.lanes["warrant"]
         before = snapshot(lane.env)
-        runtime = make_runtime(gmail.tools(PLAYGROUND_TOOLS))
+        runtime = make_runtime(live_tools())
         result, error = runtime.run_function(lane.env, call["function"], call["args"])
         if not error:
             for v in call.get("values") or []:
@@ -737,8 +791,7 @@ def history(sid: str, user: dict = Depends(current_user)) -> dict:
     env = s.lanes["warrant"].env
     return {"history": s.history, "pending": list(s.pending), "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
             "gmail_live": gmail.is_live(env.inbox),
-            "connections": {"gmail": "live" if gmail.is_live(env.inbox) else "simulated",
-                            "slack": "live" if env.slack.live else "simulated", "bank": "simulated", "drive": "simulated"}}
+            "connections": connections(env)}
 
 
 @router.get("/audit")

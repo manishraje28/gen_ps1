@@ -141,11 +141,9 @@ def test_fallback_without_credentials(monkeypatch, tmp_path):
 def test_service_is_per_thread(monkeypatch):
     """Regression: one shared httplib2 client across the parallel lanes caused SSL WRONG_VERSION_NUMBER."""
     import threading
-    import types
     import googleapiclient.discovery as disc
-    from google.oauth2.credentials import Credentials
     gmail.set_service(None)
-    monkeypatch.setattr(Credentials, "from_authorized_user_file", staticmethod(lambda *a, **k: types.SimpleNamespace(valid=True)))
+    monkeypatch.setattr(gmail, "credentials", lambda: None)
     monkeypatch.setattr(disc, "build", lambda *a, **k: object())
     gmail._local.__dict__.clear()
     seen = []
