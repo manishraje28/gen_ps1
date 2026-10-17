@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WARRANT Workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/workspace/ws.css?v=5">
+  <link rel="stylesheet" href="/static/workspace/shell.css?v=5">
+  <link rel="stylesheet" href="/static/workspace/dash.css?v=6">
+</head>
+<body class="shell dash">
+<!-- ============ top bar (full width) ============ -->
+<header class="topbar">
+  <button class="iconbtn menu-btn" id="menuBtn" type="button" aria-label="Menu"><svg><use href="/static/workspace/sprite.svg#tasks"/></svg></button>
+  <a class="brand" href="#/home"><span class="brand-box"><svg><use href="/static/workspace/sprite.svg#shield"/></svg></span><span>WARRANT <em>Workspace</em></span></a>
+  <div class="top-right">
+    <button class="iconbtn bell" id="bellBtn" type="button" aria-label="Waiting for your approval"><svg><use href="/static/workspace/sprite.svg#bell"/></svg><i id="bellDot" hidden></i></button>
+    <div class="menu">
+      <button class="avatar" id="setBtn" type="button" aria-expanded="false" title="Settings"></button>
+      <div class="menu-pop" id="setPop" hidden>
+        <div class="pop-user"><b id="meName"></b><span class="muted" id="meEmail"></span></div>
+        <a class="btn ghost sm auth-btn" id="authLink" href="/auth/google/login" hidden></a>
+        <div class="otp-box" id="otpBox" hidden></div>
+        <hr class="perf">
+        <label class="opt"><input type="checkbox" id="optCompare" checked><span><b>Compare with an unprotected assistant</b><i>Every task also runs without WARRANT, side by side.</i></span></label>
+        <label class="opt"><input type="checkbox" id="optGullible" checked><span><b>Worst case for attacks</b><i>When an attack task reads the poisoned data, both assistants try what the hidden instruction asks. Only the checkpoint differs.</i></span></label>
+        <label class="opt"><input type="checkbox" id="optMask" checked><span><b>Hide instructions found in data</b><i>Used when worst case is off.</i></span></label>
+        <hr class="perf">
+        <button class="quiet" id="resetBtn" type="button">Reset the workspace</button>
+        <div class="muted small" id="modelLine" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+  <!-- ============ sidebar ============ -->
+  <aside class="nav" aria-label="Main">
+    <div class="nav-sec">Workspace</div>
+    <nav class="nav-list" id="navList"></nav>
+    <div class="nav-sec">Pinned</div>
+    <nav class="nav-list">
+      <a class="nav-a" href="#/lab"><svg><use href="/static/workspace/sprite.svg#bolt"/></svg>Attack lab</a>
+    </nav>
+  </aside>
+
+  <main class="page" id="page"></main>
+
+  <!-- ============ right rail ============ -->
+  <aside class="rail" aria-label="Overview">
+    <section class="card rail-card"><div class="card-h"><h2>Connected apps</h2><a class="link" href="#/apps" aria-label="Manage apps"><svg><use href="/static/workspace/sprite.svg#sliders"/></svg></a></div><div id="railApps"></div></section>
+    <section class="card rail-card need"><div class="need-h"><span class="app-ico"><svg><use href="/static/workspace/sprite.svg#spark"/></svg></span><div><b>Need something done?</b><span>Or try one of these common tasks.</span></div></div><div class="quick" id="railQuick"></div></section>
+    <section class="card rail-card"><div class="card-h"><h2 id="apprH">Approvals</h2><a class="link" href="#/tasks/approval">View all <svg><use href="/static/workspace/sprite.svg#arrow"/></svg></a></div><div id="railAppr"></div></section>
+  </aside>
+</div>
+
+<!-- reader -->
+<div class="over center" id="reader" hidden>
+  <section class="modal">
+    <div class="panel-head"><span class="smallcaps" id="rdKind"></span><button class="iconbtn ghost" id="rdClose" type="button" aria-label="Close"><svg><use href="/static/workspace/sprite.svg#close"/></svg></button></div>
+    <h3 id="rdTitle"></h3>
+    <div class="rd-flag" id="rdFlag" hidden><svg><use href="/static/workspace/sprite.svg#note"/></svg>This item contains instruction-like text aimed at an AI assistant (highlighted). WARRANT treats it as data, never as a command.</div>
+    <pre id="rdBody"></pre>
+    <div class="actions"><button class="btn" id="rdAsk" type="button">Ask WARRANT about this</button></div>
+  </section>
+</div>
+
+<!-- add data -->
+<div class="over center" id="plant" hidden>
+  <form class="modal" id="plantForm">
+    <div class="panel-head"><span class="smallcaps">Add data to the workspace</span><button class="iconbtn ghost" id="plClose" type="button" aria-label="Close"><svg><use href="/static/workspace/sprite.svg#close"/></svg></button></div>
+    <label class="fld">Kind<select id="plKind"><option value="email">Email (arrives in the inbox)</option><option value="file">File (in the drive)</option><option value="web">Web page</option></select></label>
+    <label class="fld k-email">From<input id="plSender" placeholder="vendor@example.test"></label>
+    <label class="fld k-email">Subject<input id="plSubject" placeholder="Updated bank details"></label>
+    <label class="fld k-file" hidden>File name<input id="plName" placeholder="notice.txt"></label>
+    <label class="fld k-file" hidden>Folder<input id="plFolder" value="/uploads"></label>
+    <label class="fld k-web" hidden>URL<input id="plUrl" placeholder="https://vendor.test/notice"></label>
+    <label class="fld">Content<textarea id="plContent" rows="8" placeholder="Paste the content. Hide an instruction in it if you like."></textarea></label>
+    <div class="actions"><button class="btn" type="submit">Add</button><span class="muted" id="plStatus"></span></div>
+  </form>
+</div>
+
+<!-- attack picker -->
+<div class="over center" id="attackPick" hidden>
+  <section class="modal">
+    <div class="panel-head"><span class="smallcaps">Try an attack · poisoned data is planted first</span><button class="iconbtn ghost" id="apClose" type="button" aria-label="Close"><svg><use href="/static/workspace/sprite.svg#close"/></svg></button></div>
+    <div class="sugg" id="ntAttack"></div>
+  </section>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<script src="/static/workspace/flows.js?v=1"></script>
+<script src="/static/workspace/app.js?v=12"></script>
+</body>
+</html>

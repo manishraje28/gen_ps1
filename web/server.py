@@ -28,6 +28,9 @@ from web.playground import router as playground_router  # noqa: E402
 STATIC = Path(__file__).resolve().parent / "static"
 app = FastAPI(title="WARRANT demo")
 app.include_router(playground_router)
+from web import auth  # noqa: E402
+app.include_router(auth.router)
+app.middleware("http")(auth.attach_user)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -41,7 +44,15 @@ async def no_stale_ui(request, call_next):
 
 
 @app.get("/")
-def index():
+@app.get("/workspace")
+def workspace_page():
+    # The main UI: the WARRANT workspace (one assistant over mail, Slack, bank and drive, ordinary vs protected).
+    return FileResponse(STATIC / "workspace" / "index.html")
+
+
+@app.get("/classic")
+def classic():
+    # The original demo UI (live demo, playground, AgentDojo benchmark tab, how it works).
     return FileResponse(STATIC / "index.html")
 
 

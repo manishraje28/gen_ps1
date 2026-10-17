@@ -15,7 +15,7 @@ def test_build_warrant_ends_with_answer_guard_and_exposes_planner():
     names = _names(pipe)
     assert names[-1] == "AnswerGuard"
     assert "PlannerHandle" in names
-    assert names.index("PlannerHandle") < names.index("ToolsExecutionLoop")
+    assert names.index("PlannerHandle") < names.index("WarrantLoop")
 
 
 def test_bench_warrant_pipelines_have_answer_guard():

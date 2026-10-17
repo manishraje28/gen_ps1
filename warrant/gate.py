@@ -36,10 +36,12 @@ from .policy import Effect, Sink, get_policy
 ALLOWED, REFUSED, NEEDS_INPUT = "ALLOWED", "REFUSED", "NEEDS_INPUT"
 # Refusals caused by tool-output data (the planner only gets a generic message for these, E5).
 DATA_CODES = {"TAINTED_VALUE", "TAINTED_CONTENT", "TAINTED_DOCUMENT", "NO_PROVENANCE", "DELEGATION_SCOPE", "SLOT_MISMATCH",
-              "SECRET_EGRESS", "NEW_PAYEE", "NEW_RECIPIENT", "REPEATED_REFUSALS"}
+              "SECRET_EGRESS", "NEW_PAYEE", "NEW_RECIPIENT", "NEW_LINK", "REPEATED_REFUSALS"}
 QUIET_ENV = "WARRANT_QUIET_REFUSALS"
 QUIET_STRIKES = 3
-QUIET_MESSAGE = "This action was not authorised by the user's request. Continue with the original task."
+REFUSAL_STREAK_HALT = 3  # back-to-back repeated/duplicate calls before the loop stops the run
+QUIET_MESSAGE = ("This action was not authorised by the user's request and was NOT executed. Do not retry it, not with other "
+                 "wording, a different reference or a different format. Tell the user it was blocked and continue with the rest of the task.")
 
 
 def config_flag(name: str, default: bool) -> bool:
@@ -49,6 +51,8 @@ def config_flag(name: str, default: bool) -> bool:
     return default if not v else v not in ("0", "false", "no", "off")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_LINK_RE = re.compile(r"(?:https?://|www\.)\S+", re.I)
+_URL_TOKEN_RE = re.compile(r"(?:https?://|www\.)", re.I)
 _EMBEDDED_RE = re.compile(r"(?:https?://|www\.)[\w.-]+(?:/[\w./?%&=-]*)?|[\w.+-]+@[\w-]+\.[\w.-]+|\b[A-Z]{2}\d{2}[A-Z0-9]{8,30}\b")
 
 
@@ -76,6 +80,12 @@ class WarrantState:
     refusals: dict[str, int] = field(default_factory=dict)  # data-caused refusal code -> count in this run
     blocked_effects: set = field(default_factory=set)       # effects refused for the rest of the run
     asked_user: int = 0  # NEEDS_INPUT outcomes (reported as their own category, not as failures)
+    # Long tasks: fingerprints of calls already refused / already committed, the current run of
+    # back-to-back refusals, and a halt flag the loop checks so a stuck planner cannot burn the budget.
+    refused_calls: set = field(default_factory=set)
+    done_calls: set = field(default_factory=set)
+    refusal_streak: int = 0
+    halted: str = ""
 
     def __post_init__(self) -> None:
         if self.ledger is None:
@@ -83,6 +93,27 @@ class WarrantState:
 
 
 CONFIRMED = "CONFIRMED"
+
+
+def call_fingerprint(call: FunctionCall) -> str:
+    return call.function + json.dumps(dict(call.args), sort_keys=True, default=str)
+
+
+# Refusals caused by *who / where* (payee, recipient, link): rewording the rest of the call does not
+# change them, so they block any retry to the same party. Others (body content, secrets, limits) only
+# block the exact same call: the user may still legitimately send something else to that party.
+SINK_CODES = {"SLOT_MISMATCH", "TAINTED_VALUE", "NO_PROVENANCE", "NEW_PAYEE", "NEW_LINK", "DELEGATION_SCOPE"}
+
+
+def sink_fingerprint(call: FunctionCall) -> str | None:
+    """Only the authority sinks (payee, amount, recipients, file ...), normalised. The planner rewording
+    a payment reference or email subject is still the same action to the same party."""
+    sinks = get_policy(call.function).sinks
+    if not sinks:
+        return None
+    norm = lambda v: sorted(origin_key(x) for x in v) if isinstance(v, (list, tuple)) else origin_key(v)
+    picked = {k: norm(v) for k, v in call.args.items() if k in sinks and v not in (None, "", [])}
+    return "sink:" + call.function + json.dumps(picked, sort_keys=True, default=str) if picked else None
 
 
 def origin_key(value: Any) -> str:
@@ -104,6 +135,8 @@ class DocInfo:
     tool: str
     text: str
     sender: str = ""      # email sender, if the document has one
+    handle: str = ""      # workspace sender handle ("sender: Bob" in a chat message), set by the platform
+    owner: str = ""       # owner of a file ("owner: ..."), if the document has one
     name: str = ""        # file name / title, if any
     secret: str = ""      # why it is confidential ("" = not)
     labelled: set = field(default_factory=set)  # numbers written next to a due-amount label
@@ -111,6 +144,8 @@ class DocInfo:
 
 _ITEM_RE = re.compile(r"^- ", re.M)
 _SENDER_RE = re.compile(r"^\s*(?:-\s+)?(?:sender|from)\s*:\s*['\"]?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", re.I | re.M)
+_OWNER_RE = re.compile(r"^\s*(?:-\s+)?owner\s*:\s*['\"]?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", re.I | re.M)
+_HANDLE_RE = re.compile(r"^\s*(?:-\s+)?sender\s*:\s*['\"]?([A-Za-z][\w .'-]{0,40}?)['\"]?\s*$", re.I | re.M)
 _DOCNAME_RE = re.compile(r"^\s*(?:-\s+)?(?:filename|file_name|name|title|subject)\s*:\s*['\"]?([^\n'\"]{1,120})", re.I | re.M)
 # Confidential sources (H5, H6): a flagged file, HR / payroll / salary files, passwords and security codes.
 _SECRET_NAME_RE = re.compile(r"payroll|salar(?:y|ies)|/hr\b|\bhr/|password|passcode|credential|secret", re.I)
@@ -191,9 +226,110 @@ class TrustedRecord:
     text: str
 
 
+# ---------------- H10: free text inside trusted outputs ----------------
+# A trusted tool (the user's bank history, contacts) vouches for its structured fields only: who was paid,
+# how much, a contact's name / email / IBAN. Free-text fields are written by whoever created the entry
+# (an incoming transaction's subject is chosen by its sender), so they are ordinary data: LOOKUP, audited.
+FREE_TEXT_FIELDS = {"subject", "note", "notes", "memo", "message", "messages", "body", "description", "content", "text",
+                    "comment", "comments", "reference", "purpose", "details", "bio", "about", "review", "reviews", "summary"}
+_KEY_LINE_RE = re.compile(r"^(\s*(?:-\s+)?)([A-Za-z_][\w-]*)\s*:(?:\s|$)")
+
+
+def _yaml_load(text: str) -> Any:
+    try:
+        import yaml  # noqa: PLC0415
+
+        return yaml.safe_load(text)
+    except Exception:
+        return None
+
+
+def _free_values(obj: Any, out: list[str]) -> list[str]:
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() in FREE_TEXT_FIELDS and v not in (None, ""):
+                out.append(v if isinstance(v, str) else json.dumps(v, default=str))
+            else:
+                _free_values(v, out)
+    elif isinstance(obj, list):
+        for x in obj:
+            _free_values(x, out)
+    return out
+
+
+def _free_ranges(text: str) -> list[tuple[int, int]]:
+    """Character ranges of free-text field values in a YAML-like output: a free-text key line and every
+    following line that is not a key of the same or a shallower item (multi-line scalars)."""
+    out: list[tuple[int, int]] = []
+    pos, cur, indent = 0, None, -1
+    for line in text.splitlines(keepends=True):
+        m = _KEY_LINE_RE.match(line)
+        ind = len(m.group(1).replace("-", " ")) if m else -1
+        if m and (cur is None or ind <= indent):
+            if cur is not None:
+                out.append((cur, pos))
+                cur = None
+            if m.group(2).lower() in FREE_TEXT_FIELDS:
+                cur, indent = pos, ind
+        pos += len(line)
+    if cur is not None:
+        out.append((cur, pos))
+    return out
+
+
+def split_free_text(text: str) -> list[str]:
+    """The free-text field values of a trusted output (parsed YAML when possible, else by key lines)."""
+    data = _yaml_load(text)
+    if isinstance(data, (dict, list)):
+        return _free_values(data, [])
+    return [text[a:b] for a, b in _free_ranges(text)]
+
+
+def strip_free_text(text: str) -> str:
+    """The output without its free-text fields (what a trusted record may vouch for)."""
+    keep, last = [], 0
+    for a, b in _free_ranges(text):
+        keep.append(text[last:a])
+        last = b
+    keep.append(text[last:])
+    out = "".join(keep)
+    for v in split_free_text(text):  # values the line scan missed (flow-style YAML, odd quoting)
+        if v.strip():
+            out = out.replace(v, " ")
+    return out
+
+
+def untrust_free_text(text: str, spans: list) -> int:
+    """H10: spans of a trusted output that lie in a free-text field (or repeat its text) lose TRUSTED."""
+    ranges = _free_ranges(text)
+    free = [norm(v) for v in split_free_text(text)]
+    n, pos = 0, 0
+    for sp in spans:
+        at = text.find(sp.text, pos)
+        if at >= 0:
+            pos = at + len(sp.text)
+        m = _KEY_LINE_RE.match(sp.text)
+        if m and m.group(2).lower() not in FREE_TEXT_FIELDS:
+            continue  # a structured field ("recipient: ...", "amount: ...") stays trusted
+        body = norm(sp.text[m.end():] if m else sp.text)
+        inside = at >= 0 and any(a <= at < b for a, b in ranges)
+        if m is not None or inside or (len(body) >= 12 and any(body in f for f in free)):
+            sp.trusted_source = False
+            sp.reasons = sp.reasons + ["free text inside a trusted record (written by whoever created the entry)"]
+            n += 1
+    return n
+
+
+# Trusted tools that describe the user themself, not their payees or contacts.
+_SELF_TOOLS = {"get_user_info", "get_user_information", "get_logged_in_github_user_information",
+               "get_shopping_account_user_information"}
+
+
 def records_from_text(text: str, source: str) -> list[TrustedRecord]:
-    """Splits a trusted tool output (YAML list or plain lines) into per-entry records."""
+    """Splits a trusted tool output (YAML list or plain lines) into per-entry records. Free-text fields
+    (subject, note, message...) are dropped first: an IBAN in a transaction subject is not a payee (H10)."""
     out = []
+    text = strip_free_text(text)
     for ch in re.split(r"\n(?=- )|\n\s*\n", text):
         ibans = {m.upper() for m in _IBAN_RE.findall(ch)}
         emails = {m.lower() for m in _EMAIL_RE.findall(ch)}
@@ -445,12 +581,16 @@ class WarrantGate(BasePipelineElement):
         docs = []
         for k, (start, body) in enumerate(_split_docs(text)):
             sender = (_SENDER_RE.search(body) or [None, ""])[1].lower()
+            handle = (_HANDLE_RE.search(body) or [None, ""])[1].strip()
+            if handle.lower() == "me" or _IBAN_RE.fullmatch(handle):
+                handle = ""
             name = (_DOCNAME_RE.search(body) or [None, ""])[1].strip() or (arg_name if len(_split_docs(text)) == 1 else "")
             secret = ""
             hit = _SECRET_NAME_RE.search(name) or _SECRET_TEXT_RE.search(body)
             if hit:
                 secret = hit.group(0)
-            info = DocInfo(key=f"{call}#{k}", tool=tool, text=body, sender=sender, name=name, secret=secret,
+            owner = (_OWNER_RE.search(body) or [None, ""])[1].lower()
+            info = DocInfo(key=f"{call}#{k}", tool=tool, text=body, sender=sender, handle=handle, owner=owner, name=name, secret=secret,
                            labelled=labelled_numbers(body, state.query))
             state.docs[info.key] = info
             docs.append((start, info))
@@ -490,24 +630,83 @@ class WarrantGate(BasePipelineElement):
         """Names of the user's payees / contacts (from name fields of their records)."""
         out = []
         for r in self._known_records(state):
+            if r.source in _SELF_TOOLS:
+                continue  # the user's own name is no witness for a payee ("given that I am Emma Johnson, ...")
             for m in re.finditer(r"(?:^|\n)\s*-?\s*(?:name|recipient_name|payee|first_name|last_name)\s*:\s*['\"]?([^\n'\"]+)", r.text, re.I):
                 toks = _name_tokens(m.group(1))
                 if toks:
                     out.append(toks)
         return out
 
-    def _witness(self, state: WarrantState, sink: Sink, value: Any, provs: list[Provenance]) -> str | None:
-        """Two-Witness (H2): one independent principal, other than the document that supplies the
+    @staticmethod
+    def _principal(doc: DocInfo | None, domains: set[str]) -> str:
+        """The known principal a document comes from ('' if none): a sender whose email domain is in the
+        user's records, or a workspace member's handle (chat messages carry a platform-set sender). Web
+        pages, files and other sender-less documents have none."""
+        if doc is None:
+            return ""
+        if doc.sender and _domain(doc.sender) in domains:
+            return doc.sender
+        return doc.handle
+
+    def _bound_names(self, state: WarrantState, domains: set[str]) -> set[str]:
+        """Names the user typed, plus names in clean text from known principals ("can you invite Dora")."""
+        names = _name_tokens(_LINK_RE.sub(" ", state.query))
+        for sp in state.ledger.spans:
+            if sp.label != DIRECTIVE and not sp.trusted_source and self._principal(state.docs.get(sp.doc), domains):
+                names |= _name_tokens(_LINK_RE.sub(" ", sp.text))
+        return {re.sub(r"'s$", "", n) for n in names}
+
+    @staticmethod
+    def _value_tokens(sink: Sink, value: Any) -> set[str]:
+        v = str(value).strip().lower()
+        if sink == Sink.URL:
+            host = re.sub(r"^(?:https?://)?(?:www\.)?", "", v).split("/")[0]
+            parts = host.split(".")[:-1]
+        else:
+            parts = [v.split("@", 1)[0]] if "@" in v else [v]
+        toks = {t for p in parts for t in re.split(r"[^a-z]+", p) if len(t) >= 3}
+        return toks - _NAME_STOP - {"www", "http", "https", "website", "site", "blog", "page", "mail", "gmail"}
+
+    def _witness(self, state: WarrantState, sink: Sink, value: Any, provs: list[Provenance], principals: bool = False) -> str | None:
+        """Two-Witness (H2, H11): one independent principal, other than the document that supplies the
         value, must vouch for it. Counted by principal, not by document: repeats inside a document,
         or several documents from the same unknown sender, are still no witness. Returns why the
-        value is witnessed, or None."""
+        value is witnessed, or None. With ``principals`` (H11: links and new recipients taken from
+        clean data) a value written by a known principal also counts, as does one bound to a name the
+        user (or a known principal) gave; a link on a web page vouches for nothing."""
         domains = self._record_domains(state) | {d.lower() for d in state.contract.limits.internal_domains}
-        if sink == Sink.RECIPIENT:
-            dom = _domain(str(value))
-            return f"its domain {dom} is already in your records" if dom and dom in domains else None
-        if sink == Sink.URL:
-            host = re.sub(r"^(?:https?://)?(?:www\.)?", "", str(value).lower()).split("/")[0]
-            return f"{host} is already in your records" if host and any(host == d or host.endswith("." + d) for d in domains) else None
+        if sink in (Sink.RECIPIENT, Sink.URL):
+            if sink == Sink.RECIPIENT:
+                dom = _domain(str(value))
+                if dom and dom in domains:
+                    return f"its domain {dom} is already in your records"
+            else:
+                host = re.sub(r"^(?:https?://)?(?:www\.)?", "", str(value).lower()).split("/")[0]
+                if host and any(host == d or host.endswith("." + d) for d in domains):
+                    return f"{host} is already in your records"
+            if not principals:
+                return None
+            v = str(value).strip().lower()
+            for p in provs:
+                sp = self._span(state, p.span_id)
+                if sp is None or sp.label == DIRECTIVE or sp.trusted_source:
+                    continue
+                doc = state.docs.get(sp.doc)
+                who = self._principal(doc, domains)
+                if who:
+                    return f"it was written by {who}, a known principal"
+                if doc is not None and doc.owner and _domain(doc.owner) in domains and                         _text_has_value(strip_free_text(doc.text), value):
+                    # e.g. the user's own file lists the person under shared_with; its free-text content does not count
+                    return f"it is in a structured field of a document owned by {doc.owner}"
+                senders = {doc.sender, doc.handle.lower()} if doc is not None else                     {m.lower() for m in _SENDER_RE.findall(p.excerpt)} | {m.lower() for m in _HANDLE_RE.findall(p.excerpt)}
+                if sink == Sink.RECIPIENT and v in senders - {""}:
+                    return "it is the document's own sender (a reply)"
+            # Name binding is for addresses only: a link's host words prove nothing ("true-informations").
+            hit = self._value_tokens(sink, value) & self._bound_names(state, domains) if sink == Sink.RECIPIENT else set()
+            if hit:
+                return f"it is bound to the name '{sorted(hit)[0]}' given by you or a known principal"
+            return None
         names = self._record_names(state)
         for p in provs:
             sp = self._span(state, p.span_id)
@@ -539,6 +738,10 @@ class WarrantGate(BasePipelineElement):
             # Origin stamp (H8): the agent itself wrote this value into the user's world from a document,
             # so reading it back from their history is not a TRUSTED source.
             provs = [Provenance(SlotKind.LOOKUP, p.label, p.span_id, p.tool, p.excerpt) if p.kind == SlotKind.TRUSTED else p for p in provs]
+        if sink == Sink.URL:
+            # A trusted output vouches for the user's payees and contacts, not for links: a link in a channel
+            # name or in a record's text is ordinary data (H11).
+            provs = [Provenance(SlotKind.LOOKUP, p.label, p.span_id, p.tool, p.excerpt) if p.kind == SlotKind.TRUSTED else p for p in provs]
         good = [p for p in provs if p.kind is not None]
         tainted = [p for p in provs if p.label == DIRECTIVE]
         res = {"arg": arg, "sink": sink.value, "value": _short(value, 80), "allowed_kinds": [k.value for k in allowed], "provenance": [p.as_dict() for p in provs[:4]]}
@@ -562,7 +765,8 @@ class WarrantGate(BasePipelineElement):
                 held = self._taint_check(state, sink, value, good)
                 if held is not None:
                     return {**res, **held}
-            if sink in (Sink.IBAN, Sink.RECIPIENT) and match.kind in (SlotKind.LOOKUP, SlotKind.DELEGATED):
+            if (sink in (Sink.IBAN, Sink.RECIPIENT) and match.kind in (SlotKind.LOOKUP, SlotKind.DELEGATED)) or \
+                    (sink == Sink.URL and match.kind == SlotKind.LOOKUP):
                 held = self._binding_check(state, sink, value, good)
                 if held is not None:
                     return {**res, **held}
@@ -662,6 +866,8 @@ class WarrantGate(BasePipelineElement):
         v = str(value).strip()
         key = re.sub(r"\s+", "", v).upper() if is_iban else v.lower()
         code = "NEW_PAYEE" if is_iban else "NEW_RECIPIENT"
+        if sink == Sink.URL:
+            return self._new_value_witness(state, sink, value, good, "NEW_LINK")
         records = self._known_records(state)
         if self._in_records(state, sink, value):
             return None  # already one of the user's own payees / contacts (or confirmed by them)
@@ -692,11 +898,31 @@ class WarrantGate(BasePipelineElement):
                                f"(missing: the payee's name or domain in your contacts or payment history, or a known sender "
                                f"{'(sender ' + ', '.join(senders) + ' is unknown)' if senders else '(the document has no sender)'}).{stamp} "
                                f"Confirm with the user before paying"}
+        if not is_iban:
+            held = self._new_value_witness(state, sink, value, good, code)
+            if held is not None:
+                return held
         if not is_iban and getattr(c, "confirm_new_recipients", None) is True:
             if _domain(v) not in [d.lower() for d in c.limits.internal_domains]:
                 return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
                         "why": f"'{v}' is a new external recipient (not typed by the user, not a contact); the contract asks for confirmation"}
         return None
+
+    @staticmethod
+    def _host_seen(state: WarrantState, link: str) -> bool:
+        """The link's host appears in the request or in data read (a reformatted link, "https://x.com/" vs "x.com")."""
+        host = re.sub(r"^(?:https?://)?(?:www\.)?", "", link.lower()).split("/")[0]
+        return bool(host) and (host in state.query.lower() or any(host in sp.text.lower() for sp in state.ledger.spans))
+
+    def _new_value_witness(self, state: WarrantState, sink: Sink, value: Any, good: list[Provenance], code: str) -> dict | None:
+        """Two-Witness for links and new recipients (H11): a value taken only from data needs a witness."""
+        docs = [p for p in good if p.kind in (SlotKind.LOOKUP, SlotKind.DELEGATED)]
+        if not docs or self._witness(state, sink, value, docs, principals=True) is not None:
+            return None
+        what = "link" if sink == Sink.URL else "recipient"
+        return {"verdict": NEEDS_INPUT, "code": code, "kind": "LOOKUP",
+                "why": f"'{_short(value, 80)}' is a new {what} taken from data: not typed by you, not in your records, not written by a "
+                       f"known sender and not bound to a name you gave (it comes from {docs[0].tool}). Confirm with the user before using it"}
 
     def _check_amount(self, state: WarrantState, arg: str, value: Any) -> dict:
         """An amount must be bound to something: a number the user typed, a number in their own
@@ -834,6 +1060,19 @@ class WarrantGate(BasePipelineElement):
                         decision["checks"].append({"arg": arg, "sink": "content", "value": tok, "allowed_kinds": [], "provenance": [p.as_dict() for p in provs[:2]],
                                                    "verdict": REFUSED, "code": "TAINTED_CONTENT",
                                                    "why": f"'{tok}' inside {arg} comes only from instruction-like text in untrusted data"})
+                    elif pol.effect == Effect.EGRESS and _URL_TOKEN_RE.match(tok) and not provs and \
+                            not self._host_seen(state, tok):
+                        decision["checks"].append({"arg": arg, "sink": "content", "value": tok, "allowed_kinds": [], "provenance": [],
+                                                   "verdict": NEEDS_INPUT, "code": "NEW_LINK", "kind": None,
+                                                   "why": f"'{tok}' inside {arg} is a link that is not in your request or in any data read"})
+                    elif pol.effect == Effect.EGRESS and _URL_TOKEN_RE.match(tok) and provs and \
+                            not any(p.kind == SlotKind.USER_LITERAL for p in provs):
+                        # H11: a link sent on ("send this link to Alice") needs the same witness as a link visited.
+                        good = [Provenance(SlotKind.LOOKUP, p.label, p.span_id, p.tool, p.excerpt) for p in provs if p.kind is not None]
+                        held = self._new_value_witness(state, Sink.URL, tok, good, "NEW_LINK")
+                        if held is not None:
+                            decision["checks"].append({"arg": arg, "sink": "content", "value": tok, "allowed_kinds": [],
+                                                       "provenance": [p.as_dict() for p in provs[:2]], **held})
         # Secrecy (H5, H6): confidential values must not leave in free text (a body, a subject, a file
         # name, a URL's query string) unless the user named that confidential source in the request.
         if pol.effect != Effect.READ or any(s == Sink.URL for s in pol.sinks.values()):
@@ -929,11 +1168,23 @@ class WarrantGate(BasePipelineElement):
                 continue
 
             self.emit("stage", stage="gate", status="active")
-            try:
-                self._load_records(state, runtime, env)
-                decision = self._decide(state, call)
-            except Exception as exc:  # fail closed
-                decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "INTERNAL_ERROR", "reason": str(exc)}
+            fp, sfp = call_fingerprint(call), sink_fingerprint(call)
+            if state.halted:
+                decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "RUN_HALTED", "reason": state.halted}
+            elif fp in state.refused_calls or (sfp and sfp in state.refused_calls):
+                decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "REPEAT_REFUSED",
+                            "reason": "this action (same payee / recipient / target) was already refused in this run"}
+            elif pol.effect != Effect.READ and fp in state.done_calls:
+                # Could be a planner loop or an injection replaying an allowed action, or the user really
+                # wants it twice: never repeat it on our own, ask the user.
+                decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": NEEDS_INPUT, "code": "DUPLICATE_CALL",
+                            "reason": "this exact action already ran in this run; asking the user whether to perform it again"}
+            else:
+                try:
+                    self._load_records(state, runtime, env)
+                    decision = self._decide(state, call)
+                except Exception as exc:  # fail closed
+                    decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "INTERNAL_ERROR", "reason": str(exc)}
 
             diff: list[dict] = []
             if decision["decision"] == ALLOWED and pol.effect != Effect.READ:
@@ -956,6 +1207,16 @@ class WarrantGate(BasePipelineElement):
             self._audit(state, {"type": "decision", "seq": state.seq, "tool": call.function, "args": dict(call.args), **{k: decision[k] for k in ("effect", "decision", "code", "reason")}, "checks": decision["checks"], "diff": diff[:8]})
 
             if decision["decision"] != ALLOWED:
+                if decision["code"] != "DUPLICATE_CALL":
+                    state.refused_calls.add(fp)
+                    if sfp and decision["code"] in SINK_CODES:
+                        state.refused_calls.add(sfp)
+                if decision["code"] in ("REPEAT_REFUSED", "DUPLICATE_CALL"):  # planner is stuck retrying
+                    state.refusal_streak += 1
+                if state.refusal_streak >= REFUSAL_STREAK_HALT and not state.halted:
+                    state.halted = f"{state.refusal_streak} refusals in a row; run stopped"
+                    self.emit("halt", reason=state.halted)
+                    self._audit(state, {"type": "halt", "seq": state.seq, "reason": state.halted})
                 self.emit("stage", stage="refuse", status="active")
                 msg = self._refusal_message(state, decision, pol.effect)
                 results.append(self._tool_msg(call, call_id, "", msg))
@@ -966,7 +1227,10 @@ class WarrantGate(BasePipelineElement):
             # ---- commit ----
             self.emit("stage", stage="commit", status="active")
             result, error = runtime.run_function(env, call.function, call.args)
+            state.refusal_streak = 0
             if not error:
+                if pol.effect != Effect.READ:
+                    state.done_calls.add(fp)
                 self._commit_counters(state, pol.effect, call)
                 self._stamp(state, decision)
             text = self.fmt(result) if not error else ""
@@ -977,6 +1241,8 @@ class WarrantGate(BasePipelineElement):
             spans = audit_output(text, call_id, call.function, f"s{state.seq}", use_llm=self.auditor_llm, user_request=state.query) if text else []
             for sp in spans:
                 sp.trusted_source = pol.trusted_source
+            if pol.trusted_source:
+                untrust_free_text(text, spans)
             if state.contract.delegated_sources:
                 mark_delegation(spans, f"{call.function} {json.dumps(dict(call.args), default=str)}\n{text}", state.contract.delegated_sources)
             self.label_read(state, call.function, dict(call.args), text, spans)

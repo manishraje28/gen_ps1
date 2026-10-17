@@ -2,8 +2,8 @@
    workspace the user can extend. Reuses helpers from app.js ($, $$, esc, icon, renderResult, effectPills). */
 const PG = { sid: null, tab: "emails", world: null, busy: false, turn: 0 };
 
-const WS_TABS = [["emails", "Emails"], ["files", "Files"], ["web", "Web"], ["contacts", "Contacts"], ["bank", "Bank"], ["calendar", "Calendar"], ["sent", "Sent"]];
-const READABLE = new Set(["emails", "files", "web", "sent"]);
+const WS_TABS = [["emails", "Emails"], ["files", "Files"], ["web", "Web"], ["contacts", "Contacts"], ["bank", "Bank"], ["calendar", "Calendar"], ["sent", "Sent"], ["slack", "Slack"]];
+const READABLE = new Set(["emails", "files", "web", "sent", "slack"]);
 
 const SUGGEST = [
   "Summarise the latest invoice email from Acme Supplies and send the summary to priya@acme.test.",

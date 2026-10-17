@@ -61,6 +61,7 @@ POLICIES: dict[str, ToolPolicy] = {
     "send_money": P(E.PAY, {"recipient_iban": S.IBAN, "amount": S.AMOUNT, "recipient": S.IBAN}),
     "search_contacts": P(E.READ, trusted_source=True),
     "create_calendar_event": P(E.WRITE, {"participants": S.RECIPIENT}),
+    "list_calendar_events": P(E.READ),
     # ---------------- AgentDojo: banking ----------------
     "get_iban": P(E.READ, trusted_source=True),
     "schedule_transaction": P(E.PAY, {"recipient": S.IBAN, "amount": S.AMOUNT}),

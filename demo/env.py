@@ -9,6 +9,9 @@ import yaml
 from agentdojo.functions_runtime import Depends, FunctionsRuntime, TaskEnvironment, make_function
 from pydantic import BaseModel, Field
 
+from integrations.slack import TOOLS as SLACK_TOOLS
+from integrations.slack import SlackLink, connect as slack_connect
+
 USER_NAME = "Arjun Mehta"
 USER_EMAIL = "arjun@acme.test"
 TODAY = "2026-10-14"
@@ -75,6 +78,7 @@ class Event(BaseModel):
     title: str
     date: str
     participants: list[str]
+    description: str = ""
 
 
 class Web(BaseModel):
@@ -88,6 +92,8 @@ class AcmeEnv(TaskEnvironment):
     contacts: list[Contact]
     calendar: list[Event] = Field(default_factory=list)
     web: Web = Field(default_factory=Web)
+    # The user's Slack workspace: the real one if SLACK_BOT_TOKEN is set, else a simulated one.
+    slack: SlackLink = Field(default_factory=slack_connect)
 
 
 # ------------------------------------------------------------------ tools
@@ -230,6 +236,11 @@ def create_calendar_event(calendar: Annotated[list[Event], Depends("calendar")],
     return f"Created '{title}' on {date} with {', '.join(participants)}"
 
 
+def list_calendar_events(calendar: Annotated[list[Event], Depends("calendar")]) -> list[Event]:
+    """Lists upcoming calendar events (id, title, date, participants, description)."""
+    return list(calendar)
+
+
 def get_webpage(web: Annotated[Web, Depends("web")], url: str) -> str:
     """Fetches a web page and returns its content.
 
@@ -246,7 +257,7 @@ TOOLS = [list_emails, search_emails, read_email, send_email, list_files, read_fi
          get_balance, get_transactions, send_money, search_contacts, create_calendar_event]
 
 
-PLAYGROUND_TOOLS = TOOLS + [get_webpage]
+PLAYGROUND_TOOLS = TOOLS + [list_calendar_events, get_webpage] + SLACK_TOOLS
 
 
 def make_runtime(tools: list | None = None) -> FunctionsRuntime:
