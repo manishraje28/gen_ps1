@@ -107,7 +107,9 @@ def test_records_snapshot_is_taken_before_any_commit(tmp_path):
     _, env, state = run_call(tmp_path, "Please pay the electricity bill in bill.txt.", [("read_file", BILL.format(iban=POWER_IBAN))],
                              ("send_money", {"recipient_iban": POWER_IBAN, "amount": 4250, "subject": "Electricity"}))
     paid = [r for r in state.records if r.source == "get_transactions"]
-    assert len(paid) == 3  # the three payments in the original history, not the one just made
+    bank = base_world().bank
+    # the original history (3 payments out, 2 credits in), not the payment just made
+    assert len(paid) == len(bank.history) + len(bank.credits) == 5
     assert env.bank.history[-1].recipient_iban == POWER_IBAN
 
 

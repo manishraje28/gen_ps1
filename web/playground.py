@@ -35,6 +35,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from integrations import gcal, gdrive, gmail, minimoth
+from demo.bank import upgrade as bank_upgrade
 from demo.env import TODAY, USER_EMAIL, AcmeEnv, Contact, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
 from demo.runner import INTERNAL_DOMAINS
 from demo.scenarios import SCENARIOS, SYSTEM_MESSAGE, base_world
@@ -195,6 +196,7 @@ def load_session(sid: str, user_id: str | None = None) -> "Session | None":
     s.history = store.tasks(sid, owner)
     s.lanes = {}
     for name, d in blob["lanes"].items():
+        d["env"].bank = bank_upgrade(d["env"].bank)  # sessions saved before the multi-account bank
         ln = Lane(attach_live(d["env"]) if name == "warrant" else d["env"])
         ln.messages, ln.spans, ln.seq, ln.origins = d["messages"], d["spans"], d["seq"], d["origins"]
         s.lanes[name] = ln
@@ -259,7 +261,8 @@ def snapshot(env: AcmeEnv) -> dict:
     return {
         "sent": len(env.inbox.sent), "payments": len(env.bank.history), "shares": len(env.drive.shares),
         "events": len(env.calendar), "files": {f.id: f"{f.folder}/{f.name}" for f in env.drive.files},
-        "ibans": {t.recipient_iban for t in env.bank.history},
+        "ibans": {t.recipient_iban for t in env.bank.history} | {p.iban for p in env.bank.payees} | {a.iban for a in env.bank.accounts},
+        "bank": env.bank.model_dump(include={"standing_orders", "payees", "cards", "accounts"}),
         "slack": len(env.slack.outbox),
     }
 
@@ -281,7 +284,13 @@ def side_effects(before: dict, env: AcmeEnv) -> list[dict]:
         out.append({"kind": "email", "text": f"Email to {', '.join(m.recipients)}: {m.subject}",
                     "detail": (f"attached: {', '.join(att)}" if att else ""), "outside": any(_external_email(r, known_emails) for r in m.recipients)})
     for t in env.bank.history[before["payments"]:]:
-        out.append({"kind": "payment", "text": f"Paid INR {t.amount:,.2f} to {t.recipient_iban}", "detail": t.subject, "outside": t.recipient_iban not in known_ibans})
+        acct = next((a.name for a in env.bank.accounts if a.id == t.account_id), t.account_id)
+        if t.category == "own_transfer":
+            out.append({"kind": "payment", "text": f"Moved INR {t.amount:,.2f} from {acct} to {t.recipient_name}", "detail": t.subject, "outside": False})
+        else:
+            out.append({"kind": "payment", "text": f"Paid INR {t.amount:,.2f} to {t.recipient_name or t.recipient_iban} ({t.recipient_iban})",
+                        "detail": f"{t.subject} · from {acct}", "outside": t.category == "payment" and t.recipient_iban not in known_ibans})
+    out += _bank_changes(before.get("bank") or {}, env, known_ibans)
     for s in env.drive.shares[before["shares"]:]:
         out.append({"kind": "share", "text": f"Shared {names.get(s.file_id, s.file_id)} with {s.email}", "detail": "", "outside": _external_email(s.email, known_emails)})
     for ev in env.calendar[before["events"]:]:
@@ -338,6 +347,61 @@ def _file_items(env: AcmeEnv) -> list[dict]:
              "confidential": bool(f.confidential), "suspicious": _suspicious(f.content)} for f in env.drive.files]
 
 
+def _bank_changes(before: dict, env: AcmeEnv, known_ibans: set[str]) -> list[dict]:
+    """Bank changes other than payments: standing orders, payees, cards, deposits."""
+    out: list[dict] = []
+    old_orders = {o["id"]: o for o in before.get("standing_orders", [])}
+    for o in env.bank.standing_orders:
+        was = old_orders.get(o.id)
+        if was is None:
+            out.append({"kind": "payment", "text": f"Standing order: INR {o.amount:,.2f} {o.frequency} to {o.recipient_name or o.recipient_iban} ({o.recipient_iban})",
+                        "detail": f"first on {o.next_date}", "outside": o.recipient_iban not in known_ibans})
+        elif was["active"] and not o.active:
+            out.append({"kind": "delete", "text": f"Cancelled standing order {o.id} to {o.recipient_name or o.recipient_iban}", "detail": "", "outside": False})
+    old_payees = {p["id"] for p in before.get("payees", [])}
+    for p in env.bank.payees:
+        if p.id not in old_payees:
+            out.append({"kind": "payment", "text": f"Saved payee {p.name} ({p.iban})", "detail": "", "outside": p.iban not in known_ibans})
+    for pid in old_payees - {p.id for p in env.bank.payees}:
+        out.append({"kind": "delete", "text": f"Removed payee {pid}", "detail": "", "outside": False})
+    old_cards = {c["id"]: c for c in before.get("cards", [])}
+    for c in env.bank.cards:
+        if c.id in old_cards and old_cards[c.id]["status"] != c.status:
+            out.append({"kind": "event", "text": f"{c.name} (…{c.last4}) {'frozen' if c.status == 'frozen' else 'unfrozen'}", "detail": "", "outside": False})
+    old_accts = {a["id"]: a for a in before.get("accounts", [])}
+    for a in env.bank.accounts:
+        if a.id not in old_accts:
+            out.append({"kind": "event", "text": f"Opened {a.name} until {a.maturity}", "detail": f"INR {a.balance:,.2f} at {a.interest_rate}%", "outside": False})
+        elif old_accts[a.id]["status"] != "closed" and a.status == "closed":
+            out.append({"kind": "event", "text": f"Closed {a.name}", "detail": "", "outside": False})
+    return out
+
+
+def _bank_items(env: AcmeEnv) -> list[dict]:
+    b = env.bank
+    names = {a.id: a.name for a in b.accounts}
+    items = [{"id": a.id, "group": "Accounts", "title": f"{a.name} · INR {a.balance:,.2f}",
+              "sub": " · ".join(x for x in (a.kind.replace("_", " "), a.iban, a.status if a.status != "active" else "",
+                                            f"{a.interest_rate}% p.a." if a.interest_rate else "", f"matures {a.maturity}" if a.maturity else "",
+                                            "joint: " + " & ".join(a.holders) if len(a.holders) > 1 else "") if x)} for a in b.accounts]
+    items.append({"id": "total", "group": "Accounts", "title": f"Total · INR {b.total:,.2f}", "sub": f"{sum(a.status != 'closed' for a in b.accounts)} open accounts"})
+    rows = sorted(b.history + b.credits, key=lambda t: (t.date, t.id), reverse=True)
+    for t in rows:
+        if t.direction == "credit":
+            title = f"+ INR {t.amount:,.0f} into {names.get(t.account_id, t.account_id)}"
+        else:
+            title = f"INR {t.amount:,.0f} → {t.recipient_name or t.recipient_iban}"
+        items.append({"id": str(t.id), "group": "Transactions", "title": title,
+                      "sub": f"{t.date} · {t.subject} · {names.get(t.account_id, t.account_id) if t.direction == 'debit' else t.category}"})
+    items += [{"id": o.id, "group": "Standing orders", "title": f"INR {o.amount:,.0f} {o.frequency} → {o.recipient_name or o.recipient_iban}",
+               "sub": f"next {o.next_date} · from {names.get(o.account_id, o.account_id)}" + ("" if o.active else " · cancelled")} for o in b.standing_orders]
+    items += [{"id": p.id, "group": "Payees", "title": p.name, "sub": f"{p.iban}" + (f" · {p.nickname}" if p.nickname else "")} for p in b.payees]
+    items += [{"id": c.id, "group": "Cards", "title": f"{c.name} …{c.last4}",
+               "sub": f"{c.status} · " + (f"owed INR {c.outstanding:,.0f} of {c.limit:,.0f} · due {c.due_date}" if c.kind == "credit" else f"linked to {names.get(c.account_id, c.account_id)}")}
+              for c in b.cards]
+    return items
+
+
 def workspace(env: AcmeEnv) -> dict:
     return {
         "emails": [{"id": e.id, "title": e.subject, "sub": f"{e.sender} · {e.date}", "sender": e.sender, "date": e.date,
@@ -346,7 +410,7 @@ def workspace(env: AcmeEnv) -> dict:
         "files": _file_items(env),
         "web": [{"id": u, "title": u.split("//", 1)[-1], "sub": f"{len(c):,} chars"} for u, c in env.web.pages.items()],
         "contacts": [{"id": c.name, "title": c.name, "sub": " · ".join(x for x in (c.email, c.iban, c.note) if x)} for c in env.contacts],
-        "bank": [{"id": str(t.id), "title": f"INR {t.amount:,.0f} → {t.recipient_name or t.recipient_iban}", "sub": f"{t.date} · {t.subject}"} for t in env.bank.history],
+        "bank": _bank_items(env),
         "calendar": [{"id": e.id, "title": e.title, "sub": f"{e.date} · {', '.join(e.participants)}"} for e in _events(env)],
         "sent": [{"id": e.id, "title": e.subject, "sub": f"to {', '.join(e.recipients)}"} for e in env.inbox.sent],
         "slack": _slack_items(env),

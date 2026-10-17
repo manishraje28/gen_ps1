@@ -10,6 +10,9 @@ from agentdojo.functions_runtime import Depends, FunctionsRuntime, TaskEnvironme
 from pydantic import BaseModel, Field
 
 from integrations.slack import TOOLS as SLACK_TOOLS
+
+from .bank import EXTRA_TOOLS as BANK_EXTRA_TOOLS
+from .bank import Account, Bank, Card, Payee, StandingOrder, Transaction, get_balance, get_transactions, send_money  # noqa: F401
 from integrations.slack import SlackLink, connect as slack_connect
 
 USER_NAME = "Arjun Mehta"
@@ -49,21 +52,6 @@ class Share(BaseModel):
 class Drive(BaseModel):
     files: list[File] = Field(default_factory=list)
     shares: list[Share] = Field(default_factory=list)
-
-
-class Transaction(BaseModel):
-    id: int
-    recipient_iban: str
-    recipient_name: str
-    amount: float
-    subject: str
-    date: str
-
-
-class Bank(BaseModel):
-    iban: str = "IN07ACME0000552190"
-    balance: float = 250000.0
-    history: list[Transaction] = Field(default_factory=list)
 
 
 class Contact(BaseModel):
@@ -188,34 +176,6 @@ def delete_file(drive: Annotated[Drive, Depends("drive")], file_id: str) -> str:
     return f"Deleted {file_id}"
 
 
-def get_balance(bank: Annotated[Bank, Depends("bank")]) -> str:
-    """Returns the user's bank account balance and IBAN."""
-    return f"Balance: INR {bank.balance:,.2f} | Account IBAN: {bank.iban}"
-
-
-def get_transactions(bank: Annotated[Bank, Depends("bank")], n: int = 10) -> list[Transaction]:
-    """Returns the user's most recent outgoing bank transactions (payees and amounts).
-
-    :param n: number of transactions to return.
-    """
-    return bank.history[-n:]
-
-
-def send_money(bank: Annotated[Bank, Depends("bank")], recipient_iban: str, amount: float, subject: str) -> str:
-    """Sends money from the user's bank account.
-
-    :param recipient_iban: IBAN of the recipient account.
-    :param amount: amount in INR.
-    :param subject: payment reference shown to the recipient.
-    """
-    if amount <= 0 or amount > bank.balance:
-        raise ValueError("Invalid amount")
-    bank.balance -= amount
-    tid = max([t.id for t in bank.history], default=0) + 1
-    bank.history.append(Transaction(id=tid, recipient_iban=recipient_iban, recipient_name="", amount=amount, subject=subject, date=TODAY))
-    return f"Paid INR {amount:,.2f} to {recipient_iban} (ref: {subject})"
-
-
 def search_contacts(contacts: Annotated[list[Contact], Depends("contacts")], query: str) -> list[Contact]:
     """Searches the user's address book (name, email, saved payee IBAN).
 
@@ -257,7 +217,7 @@ TOOLS = [list_emails, search_emails, read_email, send_email, list_files, read_fi
          get_balance, get_transactions, send_money, search_contacts, create_calendar_event]
 
 
-PLAYGROUND_TOOLS = TOOLS + [list_calendar_events, get_webpage] + SLACK_TOOLS
+PLAYGROUND_TOOLS = TOOLS + [list_calendar_events, get_webpage] + BANK_EXTRA_TOOLS + SLACK_TOOLS
 
 
 def make_runtime(tools: list | None = None) -> FunctionsRuntime:
