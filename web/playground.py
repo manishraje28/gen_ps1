@@ -37,6 +37,8 @@ from pydantic import BaseModel
 from integrations import gcal, gdrive, gmail, minimoth, speech
 from integrations import web as realweb
 from demo.bank import upgrade as bank_upgrade
+from demo.bank import EXTRA_TOOLS as BANK_EXTRA_TOOLS
+from demo.travel import TOOLS as TRAVEL_TOOLS
 from demo.travel import Travel
 from demo.env import TODAY, USER_EMAIL, AcmeEnv, Contact, Email, File, PLAYGROUND_TOOLS, format_output, make_runtime
 from demo.runner import INTERNAL_DOMAINS
@@ -108,6 +110,28 @@ def attach_live(env: AcmeEnv) -> AcmeEnv:
 
 def live_tools() -> list:
     return realweb.tools(gdrive.tools(gcal.tools(gmail.tools(PLAYGROUND_TOOLS))))
+
+
+# The full toolbox is ~60 tools; with all of them qwen3:8b drifted (asked for balances, it read the traveller
+# profile and answered about a trip) or looped on one tool (live). So the extra bank tools and the travel tools
+# are offered only when the request is about money or travel. Offering fewer tools never adds authority: the
+# gate checks every call the same way. The original bank tools (balance, transactions, send money) stay.
+_MONEY_RE = re.compile(r"\b(?:money|balances?|accounts?|bank|pay\w*|transfer\w*|send\w*\s+(?:inr|rs|₹|\d)|move\s+(?:inr|rs|₹|\d)|"
+                       r"inr|rs\.?|₹|iban|payees?|bills?|invoices?|deposits?|cards?|credit|debit|salary|savings|joint|"
+                       r"standing orders?|scheduled|fixed deposits?|fd|funds?|refunds?|transactions?|spent|owe\w*|loan)\b", re.I)
+_TRAVEL_RE = re.compile(r"\b(?:travel\w*|trips?|hotels?|stays?|rooms?|resorts?|flights?|fly|airlines?|book\w*|reserv\w*|restaurants?|"
+                        r"tables?|dinner|lunch|breakfast|cars?|rentals?|rent|cab|itinerar\w*|passport|visa|vacation|holiday|"
+                        r"paris|goa|mumbai|check[- ]?in|nights?|guests?)\b", re.I)
+
+
+def tools_for(query: str) -> list:
+    """The tools offered to the planner for this request (see _MONEY_RE / _TRAVEL_RE)."""
+    skip: set = set()
+    if not _MONEY_RE.search(query or ""):
+        skip |= set(BANK_EXTRA_TOOLS)
+    if not _TRAVEL_RE.search(query or ""):
+        skip |= set(TRAVEL_TOOLS)
+    return [t for t in live_tools() if t not in skip]
 
 
 def connections(env: AcmeEnv) -> dict:
@@ -632,7 +656,7 @@ def run_turn_lane(sess: Session, lane_name: str, query: str, mask: bool, sink, g
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # InitQuery warns when it is not the first message (multi-turn)
-            _, _, env, messages, extra = pipe.query(query, make_runtime(live_tools()), lane.env, trim_history(lane.messages))
+            _, _, env, messages, extra = pipe.query(query, make_runtime(tools_for(query)), lane.env, trim_history(lane.messages))
         lane.env, lane.messages = env, list(messages)
         state = extra.get("warrant")
         if state is not None:
