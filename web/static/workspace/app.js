@@ -13,7 +13,7 @@
   const clock = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const ago = (t) => { const s = Math.max(1, Math.round((Date.now() - t) / 1000)); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(t).toLocaleDateString(); };
 
-  const S = { sid: null, world: null, conns: {}, hasKey: true, fast: false, tasks: [], busy: false, force: null, forceQ: null, model: "" };
+  const S = { sid: null, world: null, conns: {}, hasKey: true, fast: false, tasks: [], turns: 0, busy: false, force: null, forceQ: null, model: "" };
   const SID_KEY = "warrantWorkspaceSid";
   const store = { get: () => { try { return localStorage.getItem(SID_KEY); } catch (e) { return null; } },
                   set: (v) => { try { v ? localStorage.setItem(SID_KEY, v) : localStorage.removeItem(SID_KEY); } catch (e) {} } };
@@ -76,7 +76,7 @@
     $("#modelLine").textContent = `Model: ${S.model}${S.hasKey ? "" : " · no API key"}`;
     renderChips();
   }
-  async function newSession() { const d = await api("session", {}); S.sid = d.sid; store.set(S.sid); setMeta(d); S.tasks = []; await refreshWorld(); }
+  async function newSession() { const d = await api("session", {}); S.sid = d.sid; store.set(S.sid); setMeta(d); S.tasks = []; S.turns = 0; await refreshWorld(); }
   async function restoreSession(sid) {
     S.sid = sid;
     const h = await api(`history?sid=${sid}`);
@@ -84,11 +84,14 @@
     S.world = (await api(`world?sid=${sid}`)).workspace;
     S.fast = true;
     try {
-      h.history.forEach((rec, i) => {
-        const T = newTask(rec.prompt, rec.compare, rec.ts ? rec.ts * 1000 : Date.now());
+      S.turns = 0;
+      for (const rec of h.history) {
+        const parent = rec.parent != null ? S.tasks.find((t) => t.rec === rec.parent) : null;
+        const T = parent ? addFollowup(parent, rec.prompt, rec.compare) : newTask(rec.prompt, rec.compare, rec.ts ? rec.ts * 1000 : Date.now());
+        S.turns++;
         T.replay = { rec, pending: h.pending };
-      });
-      for (const T of S.tasks) await replayTask(T);
+        await replayTask(T);
+      }
     } finally { S.fast = false; }
   }
   async function replayTask(T) {
@@ -140,7 +143,7 @@
     P.innerHTML = `
       <div class="dhead"><p class="greet">Good ${part}${S.user ? `, ${esc(S.user.name.split(" ")[0])}` : ""}</p><time>${new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "short", year: "numeric" })}</time></div>
       <div class="stats">
-        ${stat("gmail", "", (w.emails || []).length, "Emails in your inbox", flagged.length ? `${flagged.length} flagged` : "Summarise", flagged.length ? "#/inbox/attention" : "do:inbox")}
+        ${stat("gmail", "", (w.emails || []).length, "Emails in your inbox", flagged.length ? `${flagged.length} flagged` : "View", flagged.length ? "#/inbox/attention" : "#/inbox")}
         ${stat("slack", "", (w.slack || []).length, "Slack updates", "View", "#/slack")}
         ${stat("calendar", "", (w.calendar || []).length, "Upcoming events", "View", "#/calendar")}
         ${stat("drive", "", (w.files || []).length, "Files in your drive", "View", "#/drive")}
@@ -168,7 +171,7 @@
       </section>
       <div class="card"><div class="card-h"><h2>Recent activity</h2><a class="link" href="#/tasks">View all ${icon("arrow")}</a></div>
         <ul class="acts">${recent.length ? recent.map(actRow).join("") : flagged.map((e) => `<li class="act" data-mail="${esc(e.id)}"><span class="ico2 ask">${icon("note")}</span><div class="t"><b>${esc(e.title)}</b><span>${esc(e.sender)} · contains instructions aimed at an AI</span></div><time>${esc(e.date)}</time><span class="pill2 ask">Hidden instructions</span><span></span></li>`).join("") || `<li class="empty-note">No tasks yet. Ask WARRANT above.</li>`}</ul></div>`;
-    $$(".stat2", P).forEach((b) => b.onclick = () => { const go = b.dataset.go; if (go === "do:inbox") startTask(DAILY.find((d) => d.icon === "inbox").q); else location.hash = go; });
+    $$(".stat2", P).forEach((b) => b.onclick = () => { location.hash = b.dataset.go; });  // cards only navigate; tasks start from the prompt
     $$(".act[data-task]", P).forEach((r) => r.onclick = () => location.hash = `#/task/${r.dataset.task}`);
     $$(".act[data-mail]", P).forEach((r) => r.onclick = () => openItem("emails", r.dataset.mail));
     $$(".qcard[data-q]", P).forEach((b) => b.onclick = () => pickFlow(DAILY.find((d) => d.title === b.dataset.q)));
@@ -183,7 +186,8 @@
   }
   function stat(ic, cls, n, label, go, href) { return `<button type="button" class="card stat2" data-go="${href}"><span class="${cls}">${logo(ic)}</span><span class="n">${n}</span><span class="chev">${icon("arrow")}</span><span class="l">${esc(label)}</span><span class="go">${esc(go)}</span></button>`; }
   function taskStatus(T) {
-    if (!T.done) return ["run", "Running"];
+    if (!T.done) return T.stopping ? ["run", "Stopping…"] : ["run", "Running"];
+    if (T.stopped) return ["mute", "Stopped"];
     if (T.pending.size) return ["ask", "Needs approval"];
     if (T.stats.warrant.held) return ["shield", `${T.stats.warrant.held} blocked`];
     if (T.error) return ["bad", "Failed"];
@@ -248,11 +252,20 @@
     T.tab = T.tab || "progress";
     const [cls, label] = taskStatus(T);
     P.innerHTML = `<a class="crumb" href="#/tasks">${icon("back")}Tasks</a>
-      <div class="task-h"><h1>${esc(T.prompt)}</h1><span class="pill2 ${cls}" id="tStatus">${esc(label)}</span></div>
+      <div class="task-h"><h1>${esc(T.prompt)}</h1><span class="pill2 ${cls}" id="tStatus">${esc(label)}</span>${T.done ? "" : `<button class="btn ghost sm" id="tStop" type="button" ${T.stopping ? "disabled" : ""}>${icon("pause")}Stop</button>`}</div>
       <div class="task-sub">${new Date(T.ts).toLocaleString()} · ${T.compare ? "compared with an unprotected assistant" : "WARRANT only"}</div>
       ${T.done ? "" : `<div class="task-run" id="tRun"><i></i></div>`}
       <div class="card"><div class="tabs">${[["plan", "Plan"], ["progress", "Progress"], ["results", "Results"]].map(([k, l]) => `<button class="tab2 ${T.tab === k ? "on" : ""}" data-tab="${k}" type="button">${l}</button>`).join("")}</div>
-      <div class="task-body" id="tBody"></div></div>`;
+      <div class="task-body" id="tBody"></div></div>
+      <div class="card fu-box" id="fuBox" ${T.done ? "" : "hidden"}><textarea id="fuText" rows="2" placeholder="Continue this task: ask a follow-up, change something, or do the next step…"></textarea>
+        <button class="btn brand sm" id="fuSend" type="button">${icon("send")}Continue</button></div>`;
+    const fuSend = () => { const t = $("#fuText").value.trim(); if (t) startTask(t, T); };
+    $("#fuSend").onclick = fuSend;
+    $("#fuText").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); fuSend(); } };
+    if ($("#tStop")) $("#tStop").onclick = async () => {
+      T.stopping = true; $("#tStop").disabled = true; paintTaskBody(T);
+      try { await api("stop", { sid: S.sid }); } catch (e) { T.stopping = false; $("#tStop").disabled = false; toast(e.message); }
+    };
     $$(".tab2[data-tab]", P).forEach((b) => b.onclick = () => { T.tab = b.dataset.tab; pageTask(P, arg); });
     S.viewing = T;
     paintTaskBody(T);
@@ -261,7 +274,8 @@
     const body = $("#tBody");
     if (!body || S.viewing !== T || route().page !== "task") return;
     const st = $("#tStatus"); if (st) { const [c, l] = taskStatus(T); st.className = `pill2 ${c}`; st.textContent = l; }
-    if (T.done) $("#tRun")?.remove();
+    if (T.done) { $("#tRun")?.remove(); $("#tStop")?.remove(); }
+    const fu = $("#fuBox"); if (fu) fu.hidden = !T.done;
     if (T.tab === "progress") { if (T.el.parentNode !== body) { body.innerHTML = ""; body.appendChild(T.el); } return; }
     if (T.tab === "plan") {
       const all = ["READ", "WRITE", "EGRESS", "PAY", "BOOK", "DELETE", "ACCOUNT"];
@@ -359,20 +373,31 @@
     const id = S.tasks.length + 1;
     const el = document.createElement("section");
     el.className = "turn";
-    el.innerHTML = `<div class="contract" hidden></div><div class="lanes ${compare ? "" : "one"}">${compare ? laneShell("undefended") : ""}${laneShell("warrant")}</div>`;
-    const T = { id, prompt, compare, ts: ts || Date.now(), el, tickets: {}, effects: {}, finals: {}, plan: [], log: [], pending: new Set(), done: false, contract: null,
+    el.innerHTML = turnShell(compare);
+    const T = { id, rec: S.turns, followups: [], prompt, compare, ts: ts || Date.now(), el, tickets: {}, effects: {}, finals: {}, plan: [], log: [], pending: new Set(), done: false, contract: null,
       stats: { warrant: { held: 0, ask: 0, ok: 0, stopped: [] }, undefended: { sent: 0 } }, queue: Promise.resolve() };
     S.tasks.push(T);
+    return T;
+  }
+  function turnShell(compare) {
+    return `<div class="contract" hidden></div><div class="lanes ${compare ? "" : "one"}">${compare ? laneShell("undefended") : ""}${laneShell("warrant")}</div>`;
+  }
+  // A follow-up turn on a finished task: same task, new section; results reset to this turn.
+  function addFollowup(T, prompt, compare) {
+    T.el.insertAdjacentHTML("beforeend", `<div class="fu-q"><span class="smallcaps">Follow-up</span><p>${esc(prompt)}</p></div>${turnShell(compare)}`);
+    T.followups.push(prompt);
+    Object.assign(T, { compare, done: false, error: null, finals: {}, effects: {}, contract: null, ts: Date.now(),
+      stats: { warrant: { held: 0, ask: 0, ok: 0, stopped: [] }, undefended: { sent: 0 } } });
     return T;
   }
   function laneShell(lane) {
     const W = lane === "warrant";
     return `<div class="lane ${W ? "safe" : "plain"}" data-lane="${lane}"><div class="lane-head"><h3>${W ? "With WARRANT" : "Unprotected assistant"}</h3><span class="pill work">working</span></div><div class="steps"></div><div class="tail"></div></div>`;
   }
-  const laneEl = (T, lane) => $(`.lane[data-lane="${lane}"]`, T.el);
+  const laneEl = (T, lane) => [...$$(`.lane[data-lane="${lane}"]`, T.el)].pop();  // the latest turn
   function touch(T) { paintTaskBody(T); renderChat(); if (route().page === "tasks" || route().page === "home") render(); else renderNav(); }
 
-  async function startTask(text) {
+  async function startTask(text, parentT) {
     text = (text || "").trim();
     if (!text) return;
     if (S.busy) { toast("WARRANT is still working on the previous task."); return; }
@@ -384,12 +409,14 @@
     if ($("#ntSend")) $("#ntSend").disabled = true;
     if ($("#ntText")) $("#ntText").value = "";
 
-    const T = newTask(text, compare);
+    const T = parentT ? addFollowup(parentT, text, compare) : newTask(text, compare);
+    const parent = parentT ? parentT.rec : null;
     T.tab = "progress";
     location.hash = `#/task/${T.id}`;
     try {
-      const r = await fetch("/api/play/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: S.sid, message: text, mask, compare, gullible, force }) });
+      const r = await fetch("/api/play/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: S.sid, message: text, mask, compare, gullible, force, parent }) });
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || r.statusText); }
+      S.turns++;  // the server records this turn in the session history (follow-ups point at it by index)
       const reader = r.body.getReader(), dec = new TextDecoder();
       let buf = "";
       for (;;) {
@@ -443,7 +470,7 @@
       case "hijack": T.hijack = T.hijack || {}; T.hijack[`${lane}:${ev.id}`] = true; break;
       case "contract": {
         T.contract = ev.contract;
-        const all = ["READ", "WRITE", "EGRESS", "PAY", "BOOK", "DELETE", "ACCOUNT"], box = $(".contract", T.el);
+        const all = ["READ", "WRITE", "EGRESS", "PAY", "BOOK", "DELETE", "ACCOUNT"], box = [...$$(".contract", T.el)].pop();
         box.hidden = false;
         box.innerHTML = `<span class="smallcaps">Your request allows</span>${all.map((e) => `<span class="eff ${ev.contract.allowed_effects.includes(e) ? "on" : ""}">${e}</span>`).join("")}<span class="muted mono" style="margin-left:auto;font-size:11px">contract ${esc(ev.contract.hash.slice(0, 10))}…</span>`;
         addStep(T, "ok", "Understood your request", `allowed: ${ev.contract.allowed_effects.join(", ")}`);
@@ -492,6 +519,11 @@
       case "error":
         if (W) T.error = ev.message;
         if (L) $(".tail", L).insertAdjacentHTML("beforeend", `<div class="err">${esc(friendlyError(ev.message))}</div>`);
+        break;
+      case "stopped":
+        if (!T.stopped) addStep(T, "bad", "Stopped by you", "nothing further was run");
+        T.stopped = true;
+        if (L) $(".tail", L).insertAdjacentHTML("beforeend", `<div class="guard">${icon("pause")}<span>You stopped this task. Actions that already ran stay done; nothing after that was run.</span></div>`);
         break;
       case "turn_done":
         T.effects[lane] = ev.effects || [];
@@ -769,7 +801,7 @@
     $("#resetBtn").onclick = async () => {
       if (S.busy) return;
       if (!confirm("Reset the workspace? This clears tasks, planted data, approvals and what the assistants did.")) return;
-      await api("reset", { sid: S.sid }); S.tasks = []; $("#setPop").hidden = true; location.hash = "#/home"; await refreshWorld(); render();
+      await api("reset", { sid: S.sid }); S.tasks = []; S.turns = 0; $("#setPop").hidden = true; location.hash = "#/home"; await refreshWorld(); render();
     };
     $("#rdClose").onclick = () => $("#reader").hidden = true;
     $("#reader").onclick = (e) => { if (e.target.id === "reader") $("#reader").hidden = true; };

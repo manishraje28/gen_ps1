@@ -26,7 +26,7 @@ import zipfile
 from collections.abc import Sequence
 from typing import Any
 
-from agentdojo.agent_pipeline import AgentPipeline, BasePipelineElement, InitQuery, SystemMessage, ToolsExecutionLoop
+from agentdojo.agent_pipeline import AgentPipeline, BasePipelineElement, InitQuery, SystemMessage
 from agentdojo.functions_runtime import EmptyEnv, Env, FunctionCall, FunctionsRuntime
 from agentdojo.types import ChatAssistantMessage, ChatMessage, text_content_block_from_string
 from fastapi import Depends, Request, APIRouter, HTTPException
@@ -44,7 +44,7 @@ from warrant.contract import ContractCompiler
 from warrant.events import Emitter
 from warrant.gate import CONFIRMED, AnswerGuard, EmittingToolsExecutor, WarrantGate, confirm_value, origin_key
 from warrant.llm import GroqLLM, content_to_text
-from warrant.pipeline import PlannerHandle
+from warrant.pipeline import PlannerHandle, WarrantLoop
 
 router = APIRouter(prefix="/api/play")
 
@@ -119,6 +119,7 @@ class Session:
         self.id = uuid.uuid4().hex[:12]
         self.user_id = user_id
         self.lock = threading.Lock()
+        self.stop = threading.Event()  # the user pressed Stop on the running task
         self.reset()
 
     def reset(self) -> None:
@@ -165,6 +166,7 @@ def load_session(sid: str, user_id: str | None = None) -> "Session | None":
     owner, blob = got
     s = Session.__new__(Session)
     s.id, s.user_id, s.lock, s.turns, s.pending = blob["id"], owner, threading.Lock(), blob["turns"], blob["pending"]
+    s.stop = threading.Event()
     s.history = store.tasks(sid, owner)
     s.lanes = {}
     for name, d in blob["lanes"].items():
@@ -457,10 +459,10 @@ def run_turn_lane(sess: Session, lane_name: str, query: str, mask: bool, sink, g
         lane.messages[0] = {**lane.messages[0], "content": [text_content_block_from_string(system)]}
     if lane_name == "warrant":
         elems = head + [InitQuery(), ContractCompiler(use_llm=True, emit=emit, internal_domains=INTERNAL_DOMAINS), CarryLedger(lane), PlannerHandle(real), llm,
-                        ToolsExecutionLoop([WarrantGate(emit=emit, mask_directives=mask, output_formatter=format_output), llm], max_iters=12),
+                        WarrantLoop([WarrantGate(emit=emit, mask_directives=mask, output_formatter=format_output), llm], llm, emit=emit, should_stop=sess.stop.is_set),
                         AnswerGuard(emit=emit)]
     else:
-        elems = head + [InitQuery(), llm, ToolsExecutionLoop([EmittingToolsExecutor(emit, format_output), llm], max_iters=12)]
+        elems = head + [InitQuery(), llm, WarrantLoop([EmittingToolsExecutor(emit, format_output), llm], llm, emit=emit, should_stop=sess.stop.is_set)]
     pipe = AgentPipeline(elems)
     before = snapshot(lane.env)
     emit("run_start", mode=lane_name, planner=llm.name, mask=mask, query=query)
@@ -559,6 +561,17 @@ def reset(body: dict, user: dict = Depends(current_user)) -> dict:
     return {"ok": True}
 
 
+@router.post("/stop")
+def stop(body: dict, user: dict = Depends(current_user)) -> dict:
+    """Stop the running task: the agent finishes the step it is in, then runs nothing more."""
+    s = get_session(str(body.get("sid", "")), user)
+    if not s.lock.locked():
+        return {"ok": True, "running": False}
+    s.stop.set()
+    store.audit(s.user_id, s.id, "stop", {})
+    return {"ok": True, "running": True}
+
+
 class ChatTurn(BaseModel):
     sid: str
     message: str
@@ -566,6 +579,7 @@ class ChatTurn(BaseModel):
     compare: bool = True
     gullible: bool = False
     force: dict | None = None   # worst case: {"function", "args", "trigger"} the hidden instruction asks for
+    parent: int | None = None   # follow-up on an earlier task: history index of that task's first turn
 
 
 def _sse(obj: dict) -> str:
@@ -581,15 +595,25 @@ def chat(turn: ChatTurn, user: dict = Depends(current_user)):
         raise HTTPException(400, "empty message")
     if not s.lock.acquire(blocking=False):
         raise HTTPException(409, "the agent is still answering the previous message")
+    s.stop.clear()
     lanes = ["warrant", "undefended"] if turn.compare else ["warrant"]
     q: queue.Queue = queue.Queue()
     record = {"prompt": turn.message.strip(), "compare": turn.compare, "gullible": turn.gullible, "events": [], "ts": time.time()}
+    message = turn.message.strip()
+    if turn.parent is not None:
+        if not 0 <= turn.parent < len(s.history) or s.history[turn.parent].get("parent") is not None:
+            s.lock.release()
+            raise HTTPException(404, "no such task to continue")
+        record["parent"] = turn.parent
+        # The conversation is shared by all tasks in the session, so name the task being continued.
+        # Both parts are the user's own words, so the contract may treat them as such.
+        message = f"Follow-up on my earlier request \"{s.history[turn.parent]['prompt']}\": {message}"
     pending = {"n": len(lanes)}
     guard = threading.Lock()
 
     def worker(lane: str) -> None:
         try:
-            run_turn_lane(s, lane, turn.message.strip(), turn.mask, q.put, gullible=turn.gullible, force=turn.force, user=user)
+            run_turn_lane(s, lane, message, turn.mask, q.put, gullible=turn.gullible, force=turn.force, user=user)
         finally:
             with guard:
                 pending["n"] -= 1

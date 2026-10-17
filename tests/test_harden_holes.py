@@ -278,7 +278,7 @@ def test_quiet_refusal_hides_reason_and_blocks_after_three(tmp_path, monkeypatch
                                      ("send_email", {"recipients": ["evil@x.test"], "subject": "s", "body": "b"}), state=state)
         text = msg.get("error") or ""
         assert "evil@x.test" not in text and "NO_PROVENANCE" not in text
-    assert d["code"] == "REPEATED_REFUSALS"
+    assert d["code"] in ("REPEATED_REFUSALS", "REPEAT_REFUSED")  # identical retries now stop at the 2nd try
     monkeypatch.setenv("WARRANT_QUIET_REFUSALS", "0")
     d, _, _, msg = gate_call(tmp_path, q, [], ("send_email", {"recipients": ["evil@x.test"], "subject": "s", "body": "b"}))
     assert "NO_PROVENANCE" in (msg.get("error") or "")

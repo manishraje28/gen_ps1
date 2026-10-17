@@ -302,6 +302,22 @@ _SENTENCE_RE = re.compile(r"(?<=[.!?\n])\s+|(?<=\d[.)])\s+(?=[A-Z])")
 _PLURAL_OBJECT_RE = re.compile(r"\b(?:them|everyone|everybody|both|each|all|those|these|people|users|members|participants|attendees)\b", re.I)
 
 
+_NUM_WORDS = {"two": 2, "both": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+              "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20}
+_ITEM_COUNT_RE = re.compile(r"\b(?:(?:these|those|the|all|my|our|to)\s+)?(\d{1,2}|" + "|".join(_NUM_WORDS) + r")\s+(?:of\s+(?:them|these|those)|"
+                            r"(?:\w+\s+)?(?:people|persons|users|members|contacts|recipients|colleagues|emails|messages|invoices|bills|payments|"
+                            r"transactions|transfers|friends|attendees|participants|vendors|clients|customers|employees|channels))\b", re.I)
+ITEM_COUNT_CAP = 25  # an explicit count never lifts a limit above this
+
+
+def explicit_item_count(query: str) -> int | None:
+    """The largest item count the user states ("pay these 4 invoices", "email both of them")."""
+    nums = [int(m) if m.isdigit() else _NUM_WORDS[m.lower()] for m in _ITEM_COUNT_RE.findall(query)]
+    nums += [2 for _ in re.finditer(r"\bboth\b", query, re.I)]
+    nums = [n for n in nums if n > 0]
+    return min(max(nums), ITEM_COUNT_CAP) if nums else None
+
+
 def _commanded_count(query: str, effect: Effect, literal_re: re.Pattern, default: int) -> int:
     """How many times the user asks for this effect: one per sentence that commands it, at least the
     number of distinct addresses/IBANs they typed. A plural object ("message them") keeps the default."""
@@ -430,6 +446,14 @@ def compile_contract(
         # allowed action (e.g. a second email to the user's own recipient carrying injected content).
         max_egress = min(max_egress, _commanded_count(query, Effect.EGRESS, EMAIL_RE, max_egress))
         max_payments = min(max_payments, _commanded_count(query, Effect.PAY, IBAN_RE, max_payments))
+    # The user stated how many items (long multi-call tasks): size the budgets to exactly that,
+    # so "pay these 4 invoices" is not cut off at 3 and "email both" cannot send 12.
+    n_items = explicit_item_count(query)
+    if n_items:
+        if Effect.EGRESS in effects:
+            max_egress = n_items
+        if Effect.PAY in effects:
+            max_payments = n_items
     max_amount = data.get("max_total_amount")
     contract = IntentContract(
         task=str(data.get("task") or query)[:200],

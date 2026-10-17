@@ -39,7 +39,9 @@ DATA_CODES = {"TAINTED_VALUE", "TAINTED_CONTENT", "TAINTED_DOCUMENT", "NO_PROVEN
               "SECRET_EGRESS", "NEW_PAYEE", "NEW_RECIPIENT", "NEW_LINK", "REPEATED_REFUSALS"}
 QUIET_ENV = "WARRANT_QUIET_REFUSALS"
 QUIET_STRIKES = 3
-QUIET_MESSAGE = "This action was not authorised by the user's request. Continue with the original task."
+REFUSAL_STREAK_HALT = 3  # back-to-back repeated/duplicate calls before the loop stops the run
+QUIET_MESSAGE = ("This action was not authorised by the user's request and was NOT executed. Do not retry it, not with other "
+                 "wording, a different reference or a different format. Tell the user it was blocked and continue with the rest of the task.")
 
 
 def config_flag(name: str, default: bool) -> bool:
@@ -78,6 +80,12 @@ class WarrantState:
     refusals: dict[str, int] = field(default_factory=dict)  # data-caused refusal code -> count in this run
     blocked_effects: set = field(default_factory=set)       # effects refused for the rest of the run
     asked_user: int = 0  # NEEDS_INPUT outcomes (reported as their own category, not as failures)
+    # Long tasks: fingerprints of calls already refused / already committed, the current run of
+    # back-to-back refusals, and a halt flag the loop checks so a stuck planner cannot burn the budget.
+    refused_calls: set = field(default_factory=set)
+    done_calls: set = field(default_factory=set)
+    refusal_streak: int = 0
+    halted: str = ""
 
     def __post_init__(self) -> None:
         if self.ledger is None:
@@ -85,6 +93,27 @@ class WarrantState:
 
 
 CONFIRMED = "CONFIRMED"
+
+
+def call_fingerprint(call: FunctionCall) -> str:
+    return call.function + json.dumps(dict(call.args), sort_keys=True, default=str)
+
+
+# Refusals caused by *who / where* (payee, recipient, link): rewording the rest of the call does not
+# change them, so they block any retry to the same party. Others (body content, secrets, limits) only
+# block the exact same call: the user may still legitimately send something else to that party.
+SINK_CODES = {"SLOT_MISMATCH", "TAINTED_VALUE", "NO_PROVENANCE", "NEW_PAYEE", "NEW_LINK", "DELEGATION_SCOPE"}
+
+
+def sink_fingerprint(call: FunctionCall) -> str | None:
+    """Only the authority sinks (payee, amount, recipients, file ...), normalised. The planner rewording
+    a payment reference or email subject is still the same action to the same party."""
+    sinks = get_policy(call.function).sinks
+    if not sinks:
+        return None
+    norm = lambda v: sorted(origin_key(x) for x in v) if isinstance(v, (list, tuple)) else origin_key(v)
+    picked = {k: norm(v) for k, v in call.args.items() if k in sinks and v not in (None, "", [])}
+    return "sink:" + call.function + json.dumps(picked, sort_keys=True, default=str) if picked else None
 
 
 def origin_key(value: Any) -> str:
@@ -1139,11 +1168,23 @@ class WarrantGate(BasePipelineElement):
                 continue
 
             self.emit("stage", stage="gate", status="active")
-            try:
-                self._load_records(state, runtime, env)
-                decision = self._decide(state, call)
-            except Exception as exc:  # fail closed
-                decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "INTERNAL_ERROR", "reason": str(exc)}
+            fp, sfp = call_fingerprint(call), sink_fingerprint(call)
+            if state.halted:
+                decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "RUN_HALTED", "reason": state.halted}
+            elif fp in state.refused_calls or (sfp and sfp in state.refused_calls):
+                decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "REPEAT_REFUSED",
+                            "reason": "this action (same payee / recipient / target) was already refused in this run"}
+            elif pol.effect != Effect.READ and fp in state.done_calls:
+                # Could be a planner loop or an injection replaying an allowed action, or the user really
+                # wants it twice: never repeat it on our own, ask the user.
+                decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": NEEDS_INPUT, "code": "DUPLICATE_CALL",
+                            "reason": "this exact action already ran in this run; asking the user whether to perform it again"}
+            else:
+                try:
+                    self._load_records(state, runtime, env)
+                    decision = self._decide(state, call)
+                except Exception as exc:  # fail closed
+                    decision = {"tool": call.function, "effect": pol.effect.value, "checks": [], "decision": REFUSED, "code": "INTERNAL_ERROR", "reason": str(exc)}
 
             diff: list[dict] = []
             if decision["decision"] == ALLOWED and pol.effect != Effect.READ:
@@ -1166,6 +1207,16 @@ class WarrantGate(BasePipelineElement):
             self._audit(state, {"type": "decision", "seq": state.seq, "tool": call.function, "args": dict(call.args), **{k: decision[k] for k in ("effect", "decision", "code", "reason")}, "checks": decision["checks"], "diff": diff[:8]})
 
             if decision["decision"] != ALLOWED:
+                if decision["code"] != "DUPLICATE_CALL":
+                    state.refused_calls.add(fp)
+                    if sfp and decision["code"] in SINK_CODES:
+                        state.refused_calls.add(sfp)
+                if decision["code"] in ("REPEAT_REFUSED", "DUPLICATE_CALL"):  # planner is stuck retrying
+                    state.refusal_streak += 1
+                if state.refusal_streak >= REFUSAL_STREAK_HALT and not state.halted:
+                    state.halted = f"{state.refusal_streak} refusals in a row; run stopped"
+                    self.emit("halt", reason=state.halted)
+                    self._audit(state, {"type": "halt", "seq": state.seq, "reason": state.halted})
                 self.emit("stage", stage="refuse", status="active")
                 msg = self._refusal_message(state, decision, pol.effect)
                 results.append(self._tool_msg(call, call_id, "", msg))
@@ -1176,7 +1227,10 @@ class WarrantGate(BasePipelineElement):
             # ---- commit ----
             self.emit("stage", stage="commit", status="active")
             result, error = runtime.run_function(env, call.function, call.args)
+            state.refusal_streak = 0
             if not error:
+                if pol.effect != Effect.READ:
+                    state.done_calls.add(fp)
                 self._commit_counters(state, pol.effect, call)
                 self._stamp(state, decision)
             text = self.fmt(result) if not error else ""
