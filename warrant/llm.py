@@ -174,6 +174,8 @@ def chat_completion(model: str, messages: list[dict], tools: list[dict] | None =
     to WARRANT's rules.
     """
     kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    if config.REASONING_EFFORT:
+        kwargs["reasoning_effort"] = config.REASONING_EFFORT
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
