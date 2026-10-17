@@ -40,6 +40,9 @@ class ToolPolicy:
     # Output of a trusted tool comes from the user's own records (contacts,
     # account history). Free-text inside it is still audited span by span.
     trusted_source: bool = False
+    # A read whose free-text arguments still leave the user (a web search query goes to the search
+    # engine): the gate runs the secrecy check on it as it does for egress.
+    outbound: bool = False
 
 
 P = ToolPolicy
@@ -83,6 +86,7 @@ POLICIES: dict[str, ToolPolicy] = {
     "remove_user_from_slack": P(E.DELETE, {"user": S.RECIPIENT}),
     "get_webpage": P(E.READ, {"url": S.URL}),  # URLs can smuggle data out
     "post_webpage": P(E.EGRESS, {"url": S.URL}),
+    "web_search": P(E.READ, outbound=True),  # the query goes to the search engine
     # ---------------- AgentDojo: workspace ----------------
     "delete_email": P(E.DELETE, {"email_id": S.RESOURCE}),
     "get_unread_emails": P(E.READ),

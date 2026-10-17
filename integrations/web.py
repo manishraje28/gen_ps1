@@ -16,7 +16,7 @@ import re
 import socket
 from html.parser import HTMLParser
 from typing import Annotated
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 import httpx
 from agentdojo.functions_runtime import Depends
@@ -30,6 +30,12 @@ MAX_REDIRECTS = 3
 MAX_CHARS = 20_000
 USER_AGENT = "WARRANT-demo/1.0 (+get_webpage)"
 _TRANSPORT: httpx.BaseTransport | None = None  # tests inject httpx.MockTransport
+
+
+SEARCH_URL = "https://lite.duckduckgo.com/lite/"
+SEARCH_RESULTS = 5
+SEARCH_FETCH = 3          # top results whose text web_search fetches itself
+SEARCH_PAGE_CHARS = 4000  # per fetched result
 
 
 def enabled() -> bool:
@@ -189,9 +195,65 @@ def get_webpage(web: Annotated[Web, Depends("web")], url: str) -> str:
     return fetch(url)
 
 
+_RESULT_RE = re.compile(r"<a[^>]+href=[\"']([^\"']+)[\"'][^>]*class=[\"']result-link[\"'][^>]*>(.*?)</a>", re.S | re.I)
+_SNIPPET_RE = re.compile(r"<td[^>]*class=[\"']result-snippet[\"'][^>]*>(.*?)</td>", re.S | re.I)
+
+
+def _clean(fragment: str) -> str:
+    return re.sub(r"\s+", " ", html_to_text(fragment)).strip()
+
+
+def parse_results(html: str) -> list[dict]:
+    out = []
+    snippets = [_clean(m) for m in _SNIPPET_RE.findall(html)]
+    for i, (href, title) in enumerate(_RESULT_RE.findall(html)):
+        href = href.replace("&amp;", "&")
+        if "duckduckgo.com/l/" in href:
+            href = unquote(parse_qs(urlsplit(href).query).get("uddg", [""])[0])
+        if not href.startswith(("http://", "https://")) or "duckduckgo.com/y.js" in href:
+            continue  # ads and internal links
+        out.append({"title": _clean(title), "url": href, "snippet": snippets[i] if i < len(snippets) else ""})
+    return out
+
+
+def search(query: str) -> list[dict]:
+    try:
+        with httpx.Client(timeout=TIMEOUT, follow_redirects=False, transport=_TRANSPORT,
+                          headers={"User-Agent": "Mozilla/5.0 (compatible; WARRANT-demo/1.0)"}) as client:
+            r = client.get(SEARCH_URL, params={"q": query})
+    except httpx.HTTPError as e:
+        raise ValueError(f"Error: web search failed: {e}") from None
+    if r.status_code != 200:
+        raise ValueError(f"Error: web search failed ({r.status_code}); try get_webpage with a URL instead")
+    return parse_results(r.text[:MAX_BYTES])[:SEARCH_RESULTS]
+
+
+def web_search(query: str) -> str:
+    """Searches the web and returns the top results (title, URL, snippet) plus the text of the first few pages.
+    Use it when the user asks about something on the web without giving a URL.
+
+    :param query: what to search for, e.g. "AgentDojo benchmark results".
+    """
+    results = search(query)
+    if not results:
+        return f"No web results for {query!r}."
+    parts = []
+    for i, res in enumerate(results, 1):
+        block = f"[{i}] {res['title']}\nURL: {res['url']}\n{res['snippet']}"
+        if i <= SEARCH_FETCH:
+            try:
+                text = fetch(res["url"])
+                block += "\n--- page text ---\n" + text[:SEARCH_PAGE_CHARS] + ("\n[...]" if len(text) > SEARCH_PAGE_CHARS else "")
+            except ValueError as e:
+                block += f"\n(page not fetched: {e})"
+        parts.append(block)
+    return f"Web results for {query!r}:\n\n" + "\n\n".join(parts)
+
+
 def tools(base: list | None = None) -> list:
-    """Swap the simulated ``get_webpage`` for the real one, only when WARRANT_REAL_WEB is on."""
+    """Swap the simulated ``get_webpage`` for the real one and add ``web_search``, only when WARRANT_REAL_WEB is on."""
     base = list(base or sim.PLAYGROUND_TOOLS)
     if not enabled():
         return base
-    return [get_webpage if f.__name__ == "get_webpage" else f for f in base]
+    out = [get_webpage if f.__name__ == "get_webpage" else f for f in base]
+    return out + [web_search] if web_search not in out else out

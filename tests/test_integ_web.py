@@ -30,6 +30,14 @@ PAGES = {
     "https://public.example/notes": (200, {"content-type": "text/html; charset=utf-8"}, POISON),
     "https://public.example/hop": (302, {"location": "http://internal.example/admin"}, ""),
     "https://public.example/loop": (302, {"location": "/loop"}, ""),
+    "https://lite.duckduckgo.com/lite/?q=acme+partner+notes": (200, {"content-type": "text/html"}, """<table>
+<tr><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpublic.example%2Fnotes&amp;rut=x" class='result-link'>Acme <b>Partner</b> Notes</a></td></tr>
+<tr><td class='result-snippet'>Q4 shipping window and <b>invoices</b>.</td></tr>
+<tr><td><a rel="nofollow" href="https://duckduckgo.com/y.js?ad=1" class='result-link'>Sponsored</a></td></tr>
+<tr><td class='result-snippet'>ad</td></tr>
+<tr><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=http%3A%2F%2Finternal.example%2Fwiki&amp;rut=y" class='result-link'>Internal wiki</a></td></tr>
+<tr><td class='result-snippet'>intranet</td></tr>
+</table>"""),
     "https://public.example/big": (200, {"content-type": "text/plain"}, "x" * (W.MAX_BYTES + 10)),
 }
 DNS = {"public.example": ["93.184.216.34"], "evil.example": ["93.184.216.35"], "internal.example": ["10.0.0.5"],
@@ -69,7 +77,8 @@ def test_flag_off_means_no_network(net, monkeypatch):
 
 def test_flag_on_swaps_tool_only(net):
     swapped = W.tools(PLAYGROUND_TOOLS)
-    assert W.get_webpage in swapped and sim_get_webpage not in swapped and len(swapped) == len(PLAYGROUND_TOOLS)
+    assert W.get_webpage in swapped and sim_get_webpage not in swapped and W.web_search in swapped
+    assert len(swapped) == len(PLAYGROUND_TOOLS) + 1
 
 
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://public.example/x", "gopher://public.example/",
@@ -148,4 +157,45 @@ def test_injection_in_fetched_page_is_directive_and_its_url_refused(net, tmp_pat
 def test_user_requested_url_is_allowed(net, tmp_path):
     _, d = _gate(tmp_path, "Summarise https://public.example/notes for me.", [],
                  ("get_webpage", {"url": "https://public.example/notes"}))
+    assert d["decision"] == ALLOWED, d
+
+
+# ---------------- web_search ----------------
+def test_search_parses_results_and_fetches_top_pages(net):
+    out = W.web_search("acme partner notes")
+    assert "[1] Acme Partner Notes\nURL: https://public.example/notes" in out
+    assert "Q4 shipping window is Nov 3 to Nov 21." in out  # top result's page text fetched
+    assert "Sponsored" not in out  # ads dropped
+    assert "Internal wiki" in out and "page not fetched: Refused: internal.example" in out  # same SSRF limits
+    assert "https://public.example/notes" in net
+
+
+def test_search_failure_is_clear(net):
+    with pytest.raises(ValueError, match="web search failed"):
+        W.web_search("nothing mocked here")
+
+
+def test_search_policy_is_outbound_read():
+    pol = get_policy("web_search")
+    assert pol.outbound and not pol.sinks
+
+
+def test_search_query_cannot_leak_confidential_values(net, tmp_path):
+    runtime = make_runtime(W.tools(PLAYGROUND_TOOLS))
+    query = "Open file f3 and search online for how the L5 numbers compare to the market."
+    state = WarrantState(query=query, contract=compile_contract(query, list(runtime.functions), use_llm=False))
+    text = "name: salary-bands-2026.xlsx\ncontent: Salary bands L1-L7. Band L5 base pay INR 42,00,000. CONFIDENTIAL."
+    spans = audit_output(text, "r0", "read_file", "r0", use_llm=False)
+    WarrantGate.label_read(state, "read_file", {"name_or_id": "salary-bands-2026.xlsx"}, text, spans)
+    state.ledger.add(spans)
+    msg = ChatAssistantMessage(role="assistant", content=None, tool_calls=[
+        FunctionCall(function="web_search", args={"query": "L5 base pay INR 4200000 market comparison"}, id="c1")])
+    WarrantGate(audit_dir=tmp_path, output_formatter=format_output).query(query, runtime, Web_env(), [msg], {"warrant": state})
+    assert state.decisions[-1]["decision"] != ALLOWED, state.decisions[-1]
+    assert not any("duckduckgo" in u for u in net)
+
+
+def test_plain_search_is_allowed(net, tmp_path):
+    _, d = _gate(tmp_path, "Search the web for acme partner notes and tell me the shipping window.", [],
+                 ("web_search", {"query": "acme partner notes"}))
     assert d["decision"] == ALLOWED, d

@@ -1075,7 +1075,7 @@ class WarrantGate(BasePipelineElement):
                                                        "provenance": [p.as_dict() for p in provs[:2]], **held})
         # Secrecy (H5, H6): confidential values must not leave in free text (a body, a subject, a file
         # name, a URL's query string) unless the user named that confidential source in the request.
-        if pol.effect != Effect.READ or any(s == Sink.URL for s in pol.sinks.values()):
+        if pol.effect != Effect.READ or pol.outbound or any(s == Sink.URL for s in pol.sinks.values()):
             decision["checks"] += self._secret_check(state, call, pol)
         # --- perturbation hook (lane D) ---
         import os as _os  # noqa: PLC0415

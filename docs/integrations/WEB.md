@@ -1,4 +1,4 @@
-# Real web pages (`WARRANT_REAL_WEB`)
+# Real web pages and web search (`WARRANT_REAL_WEB`)
 
 By default `get_webpage` only serves the simulated pages in `env.web.pages`; any other URL returns
 `404 Not Found`. Turn on real fetching to test WARRANT against a poisoned page hosted anywhere
@@ -15,6 +15,17 @@ WARRANT_REAL_WEB=1
 Only the Playground tool list changes (`web/playground.py::live_tools` swaps in
 `integrations/web.py::get_webpage`). Simulated pages still win: a URL found in `env.web.pages` is
 served from there exactly as before. Scenarios and the benchmark are untouched.
+
+## Web search
+
+With the flag on the Playground also gets `web_search(query)` (DuckDuckGo Lite, no API key). It returns
+the top 5 results (title, URL, snippet) and the text of the first 3 pages, fetched under the same limits
+as `get_webpage`. Fetching the pages inside the search keeps the gate strict: a link found on a web page
+is not a warrant to visit it (`get_webpage` on such a link is held as NEW_LINK), but a search the user
+asked for may read its own results. Policy: `web_search` is a READ with `outbound=True`, so the gate
+runs its secrecy check on the query (a confidential value read earlier cannot leak to the search engine).
+
+Prompts: "Search the web: what is AgentDojo and who made it?" or "What does https://example.com say?"
 
 ## Order of checks
 
