@@ -125,7 +125,7 @@ def live_tools() -> list:
 def connections(env: AcmeEnv) -> dict:
     live = lambda ok: "live" if ok else "simulated"  # noqa: E731
     return {"gmail": live(gmail.is_live(env.inbox)), "calendar": live(gcal.is_live(env.calendar)),
-            "drive": live(gdrive.is_live(env.drive)), "slack": live(env.slack.live), "bank": "simulated"}
+            "drive": live(gdrive.is_live(env.drive)), "slack": live(env.slack.live), "bank": "simulated", "travel": "simulated"}
 
 
 # ---------------------------------------------------------------- sessions
@@ -267,6 +267,7 @@ def snapshot(env: AcmeEnv) -> dict:
         "ibans": {t.recipient_iban for t in env.bank.history} | {p.iban for p in env.bank.payees} | {a.iban for a in env.bank.accounts},
         "bank": env.bank.model_dump(include={"standing_orders", "payees", "cards", "accounts"}),
         "slack": len(env.slack.outbox),
+        "bookings": {b.id: b.status for b in env.travel.bookings},
     }
 
 
@@ -294,6 +295,14 @@ def side_effects(before: dict, env: AcmeEnv) -> list[dict]:
             out.append({"kind": "payment", "text": f"Paid INR {t.amount:,.2f} to {t.recipient_name or t.recipient_iban} ({t.recipient_iban})",
                         "detail": f"{t.subject} · from {acct}", "outside": t.category == "payment" and t.recipient_iban not in known_ibans})
     out += _bank_changes(before.get("bank") or {}, env, known_ibans)
+    old_bookings = before.get("bookings") or {}
+    for b in env.travel.bookings:
+        when = f"{b.start}{' to ' + b.end if b.end else ''}{' ' + b.time if b.time else ''}"
+        if b.id not in old_bookings:
+            out.append({"kind": "event", "text": f"Booked {b.kind}: {b.name} ({b.city})",
+                        "detail": f"{when} · {b.people} people" + (f" · INR {b.total:,.0f}" if b.total else ""), "outside": False})
+        elif old_bookings[b.id] != "cancelled" and b.status == "cancelled":
+            out.append({"kind": "delete", "text": f"Cancelled {b.kind} booking: {b.name}", "detail": when, "outside": False})
     for s in env.drive.shares[before["shares"]:]:
         out.append({"kind": "share", "text": f"Shared {names.get(s.file_id, s.file_id)} with {s.email}", "detail": "", "outside": _external_email(s.email, known_emails)})
     for ev in env.calendar[before["events"]:]:
@@ -405,6 +414,24 @@ def _bank_items(env: AcmeEnv) -> list[dict]:
     return items
 
 
+def _travel_items(env: AcmeEnv) -> list[dict]:
+    t = env.travel
+    items = [{"id": b.id, "group": "My bookings", "title": f"{b.name} · {b.city}" + (" · cancelled" if b.status == "cancelled" else ""),
+              "sub": " · ".join(x for x in (b.kind, b.start + (f" to {b.end}" if b.end else "") + (f" {b.time}" if b.time else ""),
+                                            f"{b.people} people", f"INR {b.total:,.0f}" if b.total else "",
+                                            f"deposit INR {b.deposit_due:,.0f} due" if b.deposit_due else "") if x)}
+             for b in t.bookings]
+    items += [{"id": h.id, "group": "Hotels", "title": f"{h.name} · {h.city}", "sub": f"★ {h.rating} · INR {h.price_per_night:,.0f}/night · {h.rooms_left} rooms left"}
+              for h in sorted(t.hotels, key=lambda h: (h.city, -h.rating))]
+    items += [{"id": f.id, "group": "Flights", "title": f"{f.airline} {f.number} · {f.origin} → {f.destination}",
+               "sub": f"{f.date} {f.departs}-{f.arrives} · INR {f.price:,.0f} · {f.seats_left} seats"} for f in t.flights]
+    items += [{"id": r.id, "group": "Restaurants", "title": f"{r.name} · {r.city}", "sub": f"★ {r.rating} · {r.cuisine} · INR {r.price_for_two:,.0f} for two"}
+              for r in t.restaurants]
+    items += [{"id": c.id, "group": "Car rentals", "title": f"{c.company} {c.car} · {c.city}",
+               "sub": f"★ {c.rating} · INR {c.price_per_day:,.0f}/day" + ("" if c.available else " · booked")} for c in t.cars]
+    return items
+
+
 def workspace(env: AcmeEnv) -> dict:
     return {
         "emails": [{"id": e.id, "title": e.subject, "sub": f"{e.sender} · {e.date}", "sender": e.sender, "date": e.date,
@@ -414,6 +441,7 @@ def workspace(env: AcmeEnv) -> dict:
         "web": [{"id": u, "title": u.split("//", 1)[-1], "sub": f"{len(c):,} chars"} for u, c in env.web.pages.items()],
         "contacts": [{"id": c.name, "title": c.name, "sub": " · ".join(x for x in (c.email, c.iban, c.note) if x)} for c in env.contacts],
         "bank": _bank_items(env),
+        "travel": _travel_items(env),
         "calendar": [{"id": e.id, "title": e.title, "sub": f"{e.date} · {', '.join(e.participants)}"} for e in _events(env)],
         "sent": [{"id": e.id, "title": e.subject, "sub": f"to {', '.join(e.recipients)}"} for e in env.inbox.sent],
         "slack": _slack_items(env),

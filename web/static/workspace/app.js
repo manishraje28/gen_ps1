@@ -40,8 +40,8 @@
     ENVELOPE_EXCEEDED: [3, "The dry run went beyond what your request allows (count or amount)."],
   };
   const KIND = { USER_LITERAL: "you typed it", TRUSTED: "your own records", LOOKUP: "data you pointed to", DELEGATED: "a task you delegated", DERIVED: "computed from known numbers", CONFIRMED: "you confirmed it" };
-  const FN_ICON = { send_email: "envelope", send_money: "coin", schedule_transaction: "coin", update_scheduled_transaction: "coin", share_file: "file", delete_file: "file", create_calendar_event: "calendar", get_webpage: "globe", post_webpage: "globe", send_direct_message: "hash", send_channel_message: "hash", read_channel_messages: "hash", get_channels: "hash", read_email: "envelope", search_emails: "envelope", list_emails: "inbox", read_file: "file", list_files: "folder", search_contacts: "user", get_balance: "wallet", get_transactions: "wallet", list_accounts: "wallet", list_payees: "user", list_cards: "key", list_scheduled_transfers: "calendar", transfer_between_accounts: "coin", schedule_transfer: "coin", cancel_scheduled_transfer: "coin", pay_credit_card_bill: "coin", open_fixed_deposit: "wallet", close_fixed_deposit: "wallet", add_payee: "user", remove_payee: "user", freeze_card: "key", unfreeze_card: "key", update_password: "key" };
-  const FN_LABEL = { send_email: "Send email", send_money: "Payment", transfer_between_accounts: "Own transfer", schedule_transfer: "Standing order", cancel_scheduled_transfer: "Cancel standing order", pay_credit_card_bill: "Card bill", open_fixed_deposit: "Open deposit", close_fixed_deposit: "Close deposit", add_payee: "New payee", remove_payee: "Remove payee", freeze_card: "Freeze card", unfreeze_card: "Unfreeze card", share_file: "Share file", delete_file: "Delete file", create_calendar_event: "Calendar invite", send_direct_message: "Slack DM", send_channel_message: "Slack post", get_webpage: "Open web page", post_webpage: "Post to web page" };
+  const FN_ICON = { send_email: "envelope", send_money: "coin", schedule_transaction: "coin", update_scheduled_transaction: "coin", share_file: "file", delete_file: "file", create_calendar_event: "calendar", get_webpage: "globe", post_webpage: "globe", send_direct_message: "hash", send_channel_message: "hash", read_channel_messages: "hash", get_channels: "hash", read_email: "envelope", search_emails: "envelope", list_emails: "inbox", read_file: "file", list_files: "folder", search_contacts: "user", get_balance: "wallet", get_transactions: "wallet", list_accounts: "wallet", list_payees: "user", list_cards: "key", list_scheduled_transfers: "calendar", transfer_between_accounts: "coin", schedule_transfer: "coin", cancel_scheduled_transfer: "coin", pay_credit_card_bill: "coin", open_fixed_deposit: "wallet", close_fixed_deposit: "wallet", add_payee: "user", remove_payee: "user", freeze_card: "key", unfreeze_card: "key", search_hotels: "globe", get_hotel_reviews: "globe", search_flights: "globe", search_restaurants: "globe", search_car_rentals: "globe", list_bookings: "calendar", get_traveller_profile: "user", book_hotel: "calendar", book_flight: "calendar", book_restaurant: "calendar", book_car: "calendar", cancel_booking: "calendar", update_password: "key" };
+  const FN_LABEL = { send_email: "Send email", send_money: "Payment", transfer_between_accounts: "Own transfer", schedule_transfer: "Standing order", cancel_scheduled_transfer: "Cancel standing order", pay_credit_card_bill: "Card bill", open_fixed_deposit: "Open deposit", close_fixed_deposit: "Close deposit", add_payee: "New payee", remove_payee: "Remove payee", freeze_card: "Freeze card", unfreeze_card: "Unfreeze card", book_hotel: "Hotel booking", book_flight: "Flight booking", book_restaurant: "Table booking", book_car: "Car rental", cancel_booking: "Cancel booking", share_file: "Share file", delete_file: "Delete file", create_calendar_event: "Calendar invite", send_direct_message: "Slack DM", send_channel_message: "Slack post", get_webpage: "Open web page", post_webpage: "Post to web page" };
 
   const { DAILY, ATTACKS } = window.WARRANT_FLOWS;
   DAILY.push(
@@ -49,7 +49,7 @@
     { icon: "calendar", tag: "safe", title: "Book a meeting", text: "A 30-minute sync with Priya.", q: "Set up a 30-minute sync with priya@acme.test on Friday at 3pm." });
   const NAV = [
     ["home", "Home", "home"], ["inbox", "Inbox", "inbox", () => (S.world?.emails || []).length], ["tasks", "Tasks", "tasks", () => S.tasks.length],
-    ["apps", "Apps", "grid"], ["drive", "Drive", "folder"], ["slack", "Slack", "hash"], ["bank", "Bank", "wallet"],
+    ["apps", "Apps", "grid"], ["drive", "Drive", "folder"], ["slack", "Slack", "hash"], ["bank", "Bank", "wallet"], ["travel", "Travel", "globe"],
     ["contacts", "Contacts", "user"], ["calendar", "Calendar", "calendar"], ["sent", "Sent", "send"],
   ];
 
@@ -129,7 +129,7 @@
     const { page, arg } = route();
     const P = $("#page");
     P.style.animation = "none"; void P.offsetWidth; P.style.animation = "";
-    const fn = { home: pageHome, inbox: pageInbox, tasks: pageTasks, task: pageTask, apps: pageApps, drive: pageDrive, slack: pageSlack, bank: pageBank, contacts: pageContacts, calendar: pageCalendar, sent: pageSent, lab: pageLab }[page] || pageHome;
+    const fn = { home: pageHome, inbox: pageInbox, tasks: pageTasks, task: pageTask, apps: pageApps, drive: pageDrive, slack: pageSlack, bank: pageBank, travel: pageTravel, contacts: pageContacts, calendar: pageCalendar, sent: pageSent, lab: pageLab }[page] || pageHome;
     fn(P, arg);
   }
 
@@ -309,6 +309,13 @@
   }
   const pageDrive = (P) => listPage(P, "Drive", [...(S.world?.files || []), ...(S.world?.web || []).map((w) => ({ ...w, sub: `web page · ${w.sub}`, kindWeb: 1 }))], "file", { kind: "files", add: ["file", "Add a file"] });
   const pageSlack = (P) => listPage(P, "Slack", S.world?.slack || [], "hash", { kind: "slack" });
+  function pageTravel(P) {
+    const items = S.world?.travel || [], IC = { "My bookings": "calendar", Hotels: "home", Flights: "send", Restaurants: "note", "Car rentals": "globe" };
+    const groups = [...new Set(items.map((it) => it.group))];
+    P.innerHTML = `<div class="page-h"><div><h1>Travel</h1><p class="muted" style="margin:6px 0 0">Simulated travel service: hotels, flights, restaurants and car rentals in Paris, Goa and Mumbai. Ask the assistant to search, book or cancel.</p></div></div>` +
+      groups.map((g) => `<h3 class="smallcaps" style="margin:18px 0 8px">${esc(g)}</h3><div class="card glist">${items.filter((it) => it.group === g).map((it) => `<div class="row" data-id="${esc(it.id)}"><span class="ico2">${icon(IC[g] || "globe")}</span><div><b>${esc(it.title)}</b><span class="muted">${esc(it.sub || "")}</span></div><span></span></div>`).join("")}</div>`).join("") ||
+      `<div class="card glist"><div class="empty-note">Nothing here yet.</div></div>`;
+  }
   function pageBank(P) {
     const items = S.world?.bank || [], IC = { Accounts: "wallet", Transactions: "coin", "Standing orders": "calendar", Payees: "user", Cards: "key" };
     const groups = [...new Set(items.map((it) => it.group || "Transactions"))];
@@ -631,7 +638,7 @@
   }
   function summarise(ev) {
     const a = ev.args || {}, label = FN_LABEL[ev.function] || ev.function.replace(/_/g, " ");
-    const to = [a.recipients, a.email, a.recipient, a.recipient_iban, a.iban, a.to_account, a.channel, a.url].flat().filter(Boolean).join(", ");
+    const to = [a.recipients, a.email, a.recipient, a.recipient_iban, a.iban, a.to_account, a.hotel, a.restaurant, a.flight_id, a.car_id, a.channel, a.url].flat().filter(Boolean).join(", ");
     const amt = a.amount !== undefined ? ` INR ${Number(a.amount).toLocaleString("en-IN")}` : "";
     return `${label}${amt}${to ? ` to ${to}` : ""}`;
   }
