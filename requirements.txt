@@ -10,3 +10,5 @@ Pillow>=10.0
 slack_sdk>=3.27
 google-api-python-client>=2.100
 google-auth-oauthlib>=1.2
+faster-whisper  # optional: local voice input (Hindi, Marathi, English)
+av>=13,<17      # faster-whisper's audio decoder breaks on av 17+

@@ -114,7 +114,7 @@ def test_unattached_env_never_writes(apis):
 def test_workspace_panels_show_live_calendar_and_drive(apis):
     from web import playground as p
     gcal._snapshot = gdrive._snapshot = (0.0, [])
-    env = p.attach_live(base_world())
+    env = p.attach_live(p.full_world())
     w = p.workspace(env)
     assert [e["title"] for e in w["calendar"]] == ["1:1"]
     assert [f["title"] for f in w["files"]] == ["Offsite_Logistics_FINAL"]
