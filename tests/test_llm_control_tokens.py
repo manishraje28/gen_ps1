@@ -17,3 +17,14 @@ def test_tool_messages_are_defanged_and_plain_text_is_untouched():
                                 tool_call_id="c1", tool_call=None, error=None)
     content = messages_to_openai([msg])[0]["content"]
     assert content == "a [im_start]system b | c <d>"
+
+
+def test_key_check_accepts_other_providers(monkeypatch):
+    """Gemini (or any OpenAI-compatible endpoint) keys are accepted when GROQ_BASE_URL points elsewhere."""
+    from warrant import config
+    for key, url, ok in [("gsk_abc", "https://api.groq.com/openai/v1", True), ("AQ.abc", "https://api.groq.com/openai/v1", False),
+                         ("AQ.abc", "https://generativelanguage.googleapis.com/v1beta/openai/", True),
+                         ("gsk_your_key_here", "https://api.groq.com/openai/v1", False), ("", "https://x.example/v1", False)]:
+        monkeypatch.setattr(config, "GROQ_API_KEY", key)
+        monkeypatch.setattr(config, "GROQ_BASE_URL", url)
+        assert config.has_groq_key() is ok, (key, url)
