@@ -557,7 +557,7 @@ def new_session(user: dict = Depends(current_user)) -> dict:
     SESSIONS[s.id] = s
     save_session(s)
     env = s.lanes["warrant"].env
-    return {"sid": s.id, "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
+    return {"sid": s.id, "has_key": config.live_llm_available(), "planner_model": config.PLANNER_MODEL,
             "gmail_live": gmail.is_live(env.inbox),
             "connections": connections(env)}
 
@@ -643,8 +643,8 @@ def _sse(obj: dict) -> str:
 @router.post("/chat")
 def chat(turn: ChatTurn, user: dict = Depends(current_user)):
     s = get_session(turn.sid, user)
-    if not config.has_groq_key():
-        raise HTTPException(400, "The playground needs a Groq key in .env (it runs a real LLM agent).")
+    if not config.live_llm_available():
+        raise HTTPException(400, "The playground needs a live model: a Groq key in .env, or the local model (Ollama) running.")
     if not turn.message.strip():
         raise HTTPException(400, "empty message")
     if not s.lock.acquire(blocking=False):
@@ -789,7 +789,7 @@ def approve(body: Approval, user: dict = Depends(current_user)) -> dict:
 def history(sid: str, user: dict = Depends(current_user)) -> dict:
     s = get_session(sid, user)
     env = s.lanes["warrant"].env
-    return {"history": s.history, "pending": list(s.pending), "has_key": config.has_groq_key(), "planner_model": config.PLANNER_MODEL,
+    return {"history": s.history, "pending": list(s.pending), "has_key": config.live_llm_available(), "planner_model": config.PLANNER_MODEL,
             "gmail_live": gmail.is_live(env.inbox),
             "connections": connections(env)}
 

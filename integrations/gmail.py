@@ -78,9 +78,11 @@ _live_ids: set[int] = set()
 
 
 def set_service(service: Any) -> None:
-    """Inject a Gmail API service (tests pass a mock); None resets."""
+    """Inject a Gmail API service (tests pass a mock); None resets. Clears the shared read cache."""
     global _service
     _service = service
+    if "clear_cache" in globals():
+        clear_cache()
 
 
 def available() -> bool:
@@ -192,10 +194,92 @@ def _line(e: Email) -> str:
     return f"{e.id} | {e.date} | from {e.sender} | {e.subject}"
 
 
-def _fetch(query: str = "", n: int = 20) -> list[Email]:
+LIST_TTL = float(os.environ.get("GMAIL_LIST_TTL", "30"))  # seconds a listing is reused by every lane and the UI
+
+
+def max_results() -> int:
+    """Emails fetched per listing (default 10). Every listed email costs one full message read the first time."""
+    try:
+        return max(1, min(50, int(os.environ.get("GMAIL_MAX_RESULTS", "10"))))
+    except ValueError:
+        return 10
+
+
+# Shared by both agents and the UI panels. Messages never change once received, so each one is downloaded once
+# per process; a listing is reused for LIST_TTL seconds. A per-key lock makes concurrent identical requests (the
+# two lanes run in parallel) wait for one fetch instead of each calling Gmail.
+_MSG_CACHE: dict[str, Email] = {}
+_LIST_CACHE: dict[tuple[str, int], tuple[float, list[str]]] = {}
+_CACHE_LOCK = threading.Lock()
+_KEY_LOCKS: dict[tuple[str, int], threading.Lock] = {}
+API_CALLS = {"list": 0, "get": 0}
+
+
+def clear_cache() -> None:
+    with _CACHE_LOCK:
+        _MSG_CACHE.clear()
+        _LIST_CACHE.clear()
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    s = str(exc)
+    return "Quota exceeded" in s or "rateLimitExceeded" in s or "userRateLimitExceeded" in s or " 429 " in s
+
+
+def _call(fn):
+    """One Gmail API call; on a per-minute quota error, wait briefly and try once more."""
+    try:
+        return fn()
+    except Exception as exc:
+        if not _is_quota_error(exc):
+            raise
+        time.sleep(float(os.environ.get("GMAIL_QUOTA_BACKOFF", "3")))
+        return fn()
+
+
+def _get_message(msg_id: str) -> Email:
+    with _CACHE_LOCK:
+        cached = _MSG_CACHE.get(msg_id)
+    if cached is not None:
+        return cached
     msgs = service().users().messages()
-    listing = msgs.list(userId="me", q=query or "in:inbox", maxResults=n).execute()
-    out = [to_email(msgs.get(userId="me", id=r["id"], format="full").execute()) for r in listing.get("messages", []) or []]
+    API_CALLS["get"] += 1
+    email = to_email(_call(lambda: msgs.get(userId="me", id=msg_id, format="full").execute()))
+    with _CACHE_LOCK:
+        _MSG_CACHE[msg_id] = email
+    return email
+
+
+def _fetch(query: str = "", n: int | None = None) -> list[Email]:
+    n = n or max_results()
+    key = (query or "in:inbox", n)
+    with _CACHE_LOCK:
+        lock = _KEY_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        with _CACHE_LOCK:
+            hit = _LIST_CACHE.get(key)
+        if hit is not None and time.monotonic() - hit[0] <= LIST_TTL:
+            ids = hit[1]
+        else:
+            msgs = service().users().messages()
+            try:
+                API_CALLS["list"] += 1
+                listing = _call(lambda: msgs.list(userId="me", q=key[0], maxResults=n).execute())
+                ids = [r["id"] for r in listing.get("messages", []) or []]
+                with _CACHE_LOCK:
+                    _LIST_CACHE[key] = (time.monotonic(), ids)
+            except Exception as exc:
+                if hit is None or not _is_quota_error(exc):
+                    raise
+                ids = hit[1]  # over quota: serve the last good listing instead of an error
+        out = []
+        for msg_id in ids:
+            try:
+                out.append(_get_message(msg_id))
+            except Exception as exc:
+                if not _is_quota_error(exc):
+                    raise
+                break  # over quota mid-way: return what we already have
     return sorted(out, key=lambda e: e.date, reverse=True)
 
 
@@ -263,7 +347,7 @@ def read_email(inbox: Annotated[Inbox, Depends("inbox")], email_id: str) -> Emai
         if e.id == email_id:
             return e
     try:
-        return to_email(service().users().messages().get(userId="me", id=email_id, format="full").execute())
+        return _get_message(email_id)
     except Exception as exc:
         raise ValueError(f"No email with id {email_id}") from exc
 
