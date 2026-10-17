@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 from typing import Annotated, Any
 
 from agentdojo.default_suites.v1.tools.slack import Message
@@ -153,11 +154,29 @@ class SlackEnv(TaskEnvironment):
 AnnotatedLink = Annotated[SlackLink, Depends("slack")]
 
 
+_MENTION_RE = re.compile(r"<([#@!])([A-Za-z0-9]+)(?:\|([^>]*))?>")
+
+
+def readable(text: str, users: dict[str, str], channels: dict[str, str]) -> str:
+    """Slack stores '#general' as '<#C0C9...>' and '@Manish' as '<@U0C9...>'. Turn them back into names,
+    as a person sees them, so the agent can act on 'post in #general'."""
+    def sub(m: re.Match) -> str:
+        kind, ident, label = m.group(1), m.group(2), m.group(3)
+        if kind == "#":
+            return "#" + (label or channels.get(ident, ident))
+        if kind == "@":
+            return "@" + (users.get(ident) or label or ident)
+        return "@" + (label or ident.lower())  # <!here>, <!channel>
+    return _MENTION_RE.sub(sub, text or "")
+
+
 def _history(link: SlackLink, cid: str, recipient: str) -> list[Message]:
     names = link.users_by_id()
+    channels = {v: k for k, v in link.channels_by_name().items()}
     r = link.api.conversations_history(channel=cid, limit=50)
     msgs = [Message(sender=names.get(m.get("user", ""), m.get("username") or m.get("bot_id") or "unknown"),
-                    recipient=recipient, body=m.get("text", "")) for m in r["messages"] if m.get("type") == "message"]
+                    recipient=recipient, body=readable(m.get("text", ""), names, channels))
+            for m in r["messages"] if m.get("type") == "message"]
     return list(reversed(msgs))  # oldest first, like AgentDojo
 
 
