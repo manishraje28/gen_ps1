@@ -130,7 +130,9 @@ _EFFECT_VERBS: dict[Effect, list[str]] = {
                  "refund", "reimburse", "wire", "send money", "settle", "top up",
                  "buy", "rebuy", "purchase", "order", "place (?:the|an?|my) order", "checkout",
                  r"(?:request|get|ask for|claim) (?:me )?an? refund",
-                 r"make (?:a|the|an?\s+\w+) payment", r"cover(?=(?:\s+\S+){0,3}?\s+(?:bill|invoice|rent|fee|cost|payment)s?\b)"],
+                 r"make (?:a|the|an?\s+\w+) payment",
+                 # "move 20000 from savings to salary" (a bare "move" stays WRITE)
+                 r"move(?=\s+(?:inr|rs\.?|₹|\d))", r"cover(?=(?:\s+\S+){0,3}?\s+(?:bill|invoice|rent|fee|cost|payment)s?\b)"],
     Effect.EGRESS: ["send", "email", "e-mail", "mail", "forward", "post", "message", "dm", "reply", "respond",
                     "tell", "notify", "inform", "publish", "text", "cc", "write back", "let \\w+ know",
                     "shoot", "ping", "loop in", r"drop (?:\w+ )?an? (?:line|note|message|email)",
@@ -146,7 +148,10 @@ _EFFECT_VERBS: dict[Effect, list[str]] = {
                    "invite", "reschedule", "write", "edit", "organi[sz]e", "put", "join", "change", "modify",
                    "make (?:a|an|the|me a) (?:appointment|event|note|file|new|list|copy|calendar)",
                    "clone", "push", "pull", "star", "unstar", "fork", "commit", "save", "copy", "upload",
-                   r"remove (?:\S+\s+){0,2}?stars?"],
+                   r"remove (?:\S+\s+){0,2}?stars?",
+                   # bank housekeeping: cards and fixed deposits
+                   r"freeze", r"block(?=\s+(?:\S+\s+){0,2}?cards?\b)",
+                   r"(?:open|close|break)(?=\s+(?:\S+\s+){0,3}?(?:fixed deposits?|fds?|deposits?)\b)"],
     Effect.DELETE: ["delete", "remove", "cancel", "clean up", "erase", "kick", "trash", "discard", "purge",
                     "get rid of", "clear out", "empty", "wipe"],
     Effect.ACCOUNT: [],  # phrase rule only, see _ACCOUNT_RE
@@ -185,7 +190,9 @@ _ACCOUNT_RE = re.compile(
     r"\bmy new (?:password|passcode|pin|address|phone number|e-?mail address|name)\b[^.?!\n]{0,80}?\b(?:update|change|set|use)\b|"
     r"\b(?:update|change|set)\b[^.?!\n]{0,40}?\bto my new (?:password|address|phone number|e-?mail address|name)\b|"
     # "add the new SSH key from my email", "remove the old ssh key"
-    r"\b(?:add|remove|delete|revoke|rotate|replace)\b(?:\s+\S+){0,4}?\s+(?:ssh|deploy|gpg|access)\s+keys?\b", re.I)
+    r"\b(?:add|remove|delete|revoke|rotate|replace)\b(?:\s+\S+){0,4}?\s+(?:ssh|deploy|gpg|access)\s+keys?\b|"
+    # "unfreeze my debit card" re-enables a payment instrument
+    r"\bun(?:freeze|block)\b(?:\s+\S+){0,3}?\s+cards?\b", re.I)
 # The user sends the agent to a website ("visit www.x.com and pay the bill"): working on that page may
 # need its forms (log in, pay, register). FORM is granted only together with another commanded effect;
 # where the form posts is still checked as a URL sink (attacker URLs stay TAINTED).
